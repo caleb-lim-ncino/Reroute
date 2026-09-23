@@ -1,5 +1,5 @@
 import type { VerdictRun } from "./agent.ts";
-import { DEMO_PRESETS, type DemoPreset } from "./demo.ts";
+import { DEMO_PRESETS, DISRUPTION_KINDS, kindLabel, lineName, type ActiveDemo } from "./demo.ts";
 import type { Verdict } from "./schema.ts";
 import { combinedLineStyle, lineStyle, LINE_STYLES } from "./lines.ts";
 import { STAGES } from "./progress.ts";
@@ -65,71 +65,135 @@ function profileLink(icon: keyof typeof LINK_ICONS, label: string, href: string,
 
 const FLASK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6.5L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M7.5 14h9"/></svg>`;
 
-// A line-coloured dot so a preset/status reads at a glance, same visual language as the
-// pill swatches elsewhere in the app but compact enough for a list row.
 function lineDot(lineId: string): string {
-  const style = lineStyle(lineId);
-  return `<span class="demo-dot" style="background:${style.colour}"></span>`;
+  return `<span class="demo-dot" style="--c:${lineStyle(lineId).colour}"></span>`;
 }
 
-function closureLabel(p: DemoPreset): string {
-  return p.closure ? `${esc(p.closure.fromName)} &rarr; ${esc(p.closure.toName)}` : esc(p.statusSeverityDescription);
+function activeSummary(d: ActiveDemo): string {
+  return d.segment
+    ? `${d.statusSeverityDescription} &middot; ${esc(d.segment.fromName)} &ndash; ${esc(d.segment.toName)}`
+    : `${d.statusSeverityDescription} &middot; whole line`;
 }
 
-// Shown in the header whenever a demo disruption is active, so a screen-share makes clear
-// the data is simulated rather than a real TfL incident. hx-swap-oob lets every /demo/*
-// response update this alongside the panel it was actually targeting.
-export function demoBadge(active: DemoPreset | null): string {
-  if (!active) return `<span id="demo-badge" class="demo-badge" hx-swap-oob="true" hidden></span>`;
-  return `<span id="demo-badge" class="demo-badge" hx-swap-oob="true">${FLASK_ICON}Demo: ${esc(active.lineName)} &ndash; ${closureLabel(active)}</span>`;
+const CLOSE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
+
+const SHUFFLE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>`;
+
+// Shown in the header only while a demo disruption is active, so a screen-share makes clear
+// the data is simulated. Deliberately small; clicking it opens the demo dialog. hx-swap-oob
+// lets every /demo/* response update it.
+export function demoBadge(active: ActiveDemo | null): string {
+  if (!active) return `<button type="button" id="demo-badge" class="demo-badge" hx-swap-oob="true" hidden></button>`;
+  const detail = `${esc(active.lineName)} &ndash; ${activeSummary(active)}`;
+  return `<button type="button" id="demo-badge" class="demo-badge" hx-swap-oob="true" data-open-demo title="Simulated disruption: ${detail}" aria-label="Demo mode on: ${detail}">${FLASK_ICON}<span>Demo</span></button>`;
 }
 
-// Developer-only panel, tucked into the profile popup: lets a presenter simulate a common
-// disruption, or a closure between two exact stations, on demand instead of hoping one is
-// happening live during a demo.
-export function demoPanel(active: DemoPreset | null): string {
-  const presets = DEMO_PRESETS.map(
-    (p) => `<button type="button" class="demo-preset" hx-post="/demo/${esc(p.id)}" hx-target="#demo-panel" hx-swap="outerHTML" ${active?.id === p.id ? 'aria-current="true"' : ""}>
-      ${lineDot(p.lineId)}<span class="demo-preset-text">${esc(p.lineName)} <small>${esc(p.statusSeverityDescription)}</small></span>
-    </button>`,
-  ).join("");
-  const lineOptions = Object.entries(LINE_STYLES)
-    .map(([id, s]) => `<option value="${esc(id)}">${esc(s.name)}</option>`)
-    .join("");
-  return `<div id="demo-panel" class="demo-panel">
-    <div class="demo-head"><span class="demo-head-icon">${FLASK_ICON}</span>Demo mode</div>
-    <p class="demo-status ${active ? "is-active" : ""}"><span class="demo-status-dot"></span>${
-      active
-        ? `Active: <strong>${esc(active.lineName)} &ndash; ${closureLabel(active)}</strong>`
-        : "No simulated disruption active."
-    }</p>
-    <div class="demo-actions">
-      <button type="button" class="demo-random" hx-post="/demo/random" hx-target="#demo-panel" hx-swap="outerHTML">Simulate random disruption</button>
-      <button type="button" class="demo-clear" hx-post="/demo/clear" hx-target="#demo-panel" hx-swap="outerHTML" ${active ? "" : "disabled"}>Clear</button>
-    </div>
-    <div class="demo-subhead">Quick presets</div>
-    <div class="demo-presets">${presets}</div>
-    <div class="demo-subhead">Closure between two stations</div>
-    <form class="demo-closure-form" hx-post="/demo/closure" hx-target="#demo-panel" hx-swap="outerHTML">
-      <select name="lineId" class="demo-line-select" required>
-        <option value="" disabled selected>Line&hellip;</option>
-        ${lineOptions}
-      </select>
-      <div class="demo-closure-stations">
-        <select name="fromId" class="demo-station-select" data-role="from" required disabled>
-          <option value="" disabled selected>From&hellip;</option>
-        </select>
-        <span class="demo-closure-arrow" aria-hidden="true">&rarr;</span>
-        <select name="toId" class="demo-station-select" data-role="to" required disabled>
-          <option value="" disabled selected>To&hellip;</option>
-        </select>
+// The profile dropdown's entry point into demo mode, with its current state at a glance.
+export function demoMenuItem(active: ActiveDemo | null): string {
+  const sub = active ? `${esc(active.lineName)} &middot; ${esc(active.statusSeverityDescription)}` : "Simulate TfL disruptions";
+  return `<button type="button" id="demo-menu-item" class="profile-demo" hx-swap-oob="true" data-open-demo>
+    <span class="link-icon">${FLASK_ICON}</span>
+    <span class="profile-demo-text"><span>Demo mode</span><small>${sub}</small></span>
+    <span class="demo-state${active ? " on" : ""}">${active ? "On" : "Off"}</span>
+  </button>`;
+}
+
+const TUBE_LINES = Object.keys(LINE_STYLES).slice(0, 11);
+
+function lineOptions(): string {
+  const opt = (id: string) => `<option value="${esc(id)}">${esc(lineName(id) ?? id)}</option>`;
+  const rest = Object.keys(LINE_STYLES).filter((id) => !TUBE_LINES.includes(id));
+  return `<optgroup label="Underground">${TUBE_LINES.map(opt).join("")}</optgroup><optgroup label="Rail">${rest.map(opt).join("")}</optgroup>`;
+}
+
+const HX = `hx-target="#demo-panel" hx-swap="outerHTML"`;
+
+// Developer-only dialog, opened from the profile dropdown: lets a presenter simulate a common
+// disruption, or delays/closures between two exact stations, on demand instead of hoping one
+// is happening live during a demo.
+export function demoDialog(active: ActiveDemo | null): string {
+  return `<dialog id="demo-dialog" class="demo-dialog" aria-labelledby="demo-title">
+    <div class="demo-sheet">
+    <div class="demo-dialog-head">
+      <span class="demo-dialog-icon">${FLASK_ICON}</span>
+      <div>
+        <h2 id="demo-title">Demo mode</h2>
+        <p>Fake a disruption on one line for a live demo. Journeys, departures and crowding stay live.</p>
       </div>
-      <button type="submit" class="demo-closure-submit">Simulate closure</button>
-    </form>
+      <button type="button" class="demo-close" data-close-demo aria-label="Close demo mode">${CLOSE_ICON}</button>
+    </div>
+    ${demoPanel(active)}
+    </div>
+  </dialog>`;
+}
+
+export function demoPanel(active: ActiveDemo | null, error = ""): string {
+  const presets = DEMO_PRESETS.map((p) => {
+    const where = p.from && p.to ? `${esc(p.from.name)} &ndash; ${esc(p.to.name)}` : "Whole line";
+    const pressed = active?.id === p.id;
+    return `<button type="button" class="demo-preset" style="--c:${lineStyle(p.lineId).colour}" hx-post="/demo/${esc(p.id)}" ${HX} aria-pressed="${pressed}">
+      <span class="demo-preset-line">${esc(lineName(p.lineId) ?? p.lineId)}</span>
+      <span class="demo-preset-kind">${kindLabel(p.kind, !!p.from)}</span>
+      <span class="demo-preset-where">${where}</span>
+    </button>`;
+  }).join("");
+  const kinds = Object.entries(DISRUPTION_KINDS)
+    .map(
+      ([k, spec], i) =>
+        `<label class="demo-kind"><input type="radio" name="kind" value="${k}"${i === 0 ? " checked" : ""}><span>${esc(spec.label)}</span></label>`,
+    )
+    .join("");
+  const status = active
+    ? `<div class="demo-status is-active" style="--c:${lineStyle(active.lineId).colour}">
+        <span class="demo-status-pulse" aria-hidden="true"></span>
+        <div class="demo-status-text"><span class="demo-status-label">Simulating now</span><strong>${esc(active.lineName)} &ndash; ${activeSummary(active)}</strong></div>
+        <button type="button" class="demo-stop" hx-post="/demo/clear" ${HX}>Stop</button>
+      </div>`
+    : `<div class="demo-status">
+        <span class="demo-status-pulse" aria-hidden="true"></span>
+        <div class="demo-status-text"><span class="demo-status-label">Off</span><strong>Showing live TfL data</strong></div>
+      </div>`;
+  return `<div id="demo-panel" class="demo-panel">
+    ${status}
+    ${error ? `<p class="demo-error" role="alert">${esc(error)}</p>` : ""}
+    <div class="demo-cols">
+      <section class="demo-section">
+        <div class="demo-section-head">
+          <h3>Quick presets</h3>
+          <button type="button" class="demo-random" hx-post="/demo/random" ${HX}>${SHUFFLE_ICON}Random</button>
+        </div>
+        <div class="demo-presets">${presets}</div>
+      </section>
+      <section class="demo-section">
+        <div class="demo-section-head"><h3>Custom disruption</h3></div>
+        <form class="demo-custom" hx-post="/demo/custom" ${HX} hx-disabled-elt="find button[type=submit]">
+          <label class="demo-field"><span>Line</span>
+            <select name="lineId" class="demo-line-select" required>
+              <option value="" disabled selected>Choose a line&hellip;</option>
+              ${lineOptions()}
+            </select>
+          </label>
+          <div class="demo-field"><span>Type</span><div class="demo-kinds" role="radiogroup" aria-label="Disruption type">${kinds}</div></div>
+          <div class="demo-field"><span>Where</span>
+            <div class="demo-stations">
+              <select name="fromId" class="demo-station-select" data-role="from" aria-label="From station" disabled>
+                <option value="">Whole line</option>
+              </select>
+              <span class="demo-stations-sep" aria-hidden="true">to</span>
+              <select name="toId" class="demo-station-select" data-role="to" aria-label="To station" disabled>
+                <option value="">&mdash;</option>
+              </select>
+            </div>
+            <small class="demo-hint">Pick two stations to limit it to that stretch; only journeys through it are flagged.</small>
+          </div>
+          <button type="submit" class="demo-submit">Simulate disruption</button>
+        </form>
+      </section>
+    </div>
   </div>`;
 }
 
-function profileWidget(active: DemoPreset | null): string {
+function profileWidget(active: ActiveDemo | null): string {
   const photo =
     "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:cb6016a1-b4a7-4694-9440-9a98b39fe727/33d50698-1ab5-40ac-887a-9c12422cbac1/128";
   return `<div class="profile">
@@ -155,7 +219,7 @@ function profileWidget(active: DemoPreset | null): string {
         ${profileLink("slack", "Slack", "https://ncino.slack.com/team/U0BTQ21PPNC")}
       </ul>
       <hr class="profile-divider">
-      ${demoPanel(active)}
+      ${demoMenuItem(active)}
     </div>
   </div>`;
 }
@@ -174,7 +238,7 @@ function combo(field: "from" | "to", placeholder: string): string {
     </div>`;
 }
 
-export function page(activeDemo: DemoPreset | null = null): string {
+export function page(activeDemo: ActiveDemo | null = null): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -227,6 +291,7 @@ export function page(activeDemo: DemoPreset | null = null): string {
     <section id="result"></section>
   </main>
   <footer id="usage" hx-get="/usage" hx-trigger="load, every 10s, verdict from:body"></footer>
+  ${demoDialog(activeDemo)}
 </body>
 </html>`;
 }

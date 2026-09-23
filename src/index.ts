@@ -3,23 +3,31 @@ import { serveStatic } from "hono/bun";
 import { prewarm, runVerdict, type StationInput, type VerdictRun } from "./agent.ts";
 import { loadConfig } from "./config.ts";
 import {
+  activate,
   activeDemo,
   clearDemo,
+  DISRUPTION_KINDS,
+  lineName,
+  lineStops,
   overrideJourneyDisruption,
   overrideLineStatus,
-  randomDemo,
-  setDemo,
-  setStationClosure,
+  presetById,
+  randomPreset,
+  type ActiveDemo,
+  type DemoSpec,
+  type DemoStop,
+  type DisruptionKind,
 } from "./demo.ts";
 import { LINE_STYLES } from "./lines.ts";
 import { cancel, finish, progressOf, STAGES } from "./progress.ts";
-import { cleanName, startStationIndex, stationById, stations } from "./stations.ts";
+import { startStationIndex, stationById, stations } from "./stations.ts";
 import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding, getRouteComparison } from "./tfl.ts";
 import type { TflJourney } from "./tfl-types.ts";
 import { usageSummary } from "./usage.ts";
 import {
   crowdingChip,
   demoBadge,
+  demoMenuItem,
   demoPanel,
   departureBoard,
   page,
@@ -41,24 +49,53 @@ app.get("/", (c) => c.html(page(activeDemo())));
 // Dev-only panel (tucked in the profile popup) for driving a live demo when there's no real
 // TfL disruption to show. hx-swap-oob on the badge markup keeps the header in sync with
 // whichever preset the panel just switched to.
-app.post("/demo/random", (c) => c.html(demoPanel(randomDemo()) + demoBadge(activeDemo())));
+const demoResponse = (result: ActiveDemo | string | null) =>
+  typeof result === "string"
+    ? demoPanel(activeDemo(), result)
+    : demoPanel(activeDemo()) + demoBadge(activeDemo()) + demoMenuItem(activeDemo());
+
+app.post("/demo/random", async (c) => c.html(demoResponse(await activate(randomPreset(), config.tflAppKey))));
 app.post("/demo/clear", (c) => {
   clearDemo();
-  return c.html(demoPanel(null) + demoBadge(null));
+  return c.html(demoResponse(null));
 });
-app.post("/demo/closure", async (c) => {
+app.get("/demo/lines/:id/stops", async (c) => {
+  const lineId = c.req.param("id");
+  if (!lineName(lineId)) return c.json({ error: "unknown line" }, 404);
+  try {
+    return c.json(await lineStops(lineId, config.tflAppKey));
+  } catch (err) {
+    console.error(`[demo] couldn't load stops for ${lineId}: ${err}`);
+    return c.json({ error: "TfL unavailable" }, 502);
+  }
+});
+app.post("/demo/custom", async (c) => {
   const body = await c.req.parseBody();
+  const lineId = field(body.lineId);
+  const kind = field(body.kind);
+  if (!lineName(lineId) || !Object.hasOwn(DISRUPTION_KINDS, kind)) {
+    return c.html(demoResponse("Pick a line and a disruption type."));
+  }
+  // Station names go into the agent's prompt, so take them from TfL's list, never the form.
+  let stops: DemoStop[] = [];
   const fromId = field(body.fromId);
   const toId = field(body.toId);
-  const from = stationById(fromId);
-  const to = stationById(toId);
-  const preset =
-    from && to ? setStationClosure(field(body.lineId), fromId, cleanName(from.name), toId, cleanName(to.name)) ?? null : null;
-  return c.html(demoPanel(preset) + demoBadge(activeDemo()));
+  if (fromId || toId) {
+    try {
+      stops = await lineStops(lineId, config.tflAppKey);
+    } catch {
+      return c.html(demoResponse("Couldn't load that line's stations from TfL. Try again in a moment."));
+    }
+  }
+  const from = stops.find((s) => s.id === fromId);
+  const to = stops.find((s) => s.id === toId);
+  if ((fromId && !from) || (toId && !to)) return c.html(demoResponse("That station isn't on the chosen line."));
+  const spec: DemoSpec = { id: "custom", lineId, kind: kind as DisruptionKind, from, to };
+  return c.html(demoResponse(await activate(spec, config.tflAppKey)));
 });
-app.post("/demo/:id", (c) => {
-  const preset = setDemo(c.req.param("id")) ?? null;
-  return c.html(demoPanel(preset) + demoBadge(activeDemo()));
+app.post("/demo/:id", async (c) => {
+  const preset = presetById(c.req.param("id"));
+  return c.html(demoResponse(preset ? await activate(preset, config.tflAppKey) : "Unknown preset."));
 });
 
 const field = (v: unknown, max = 100) => String(v ?? "").trim().slice(0, max);

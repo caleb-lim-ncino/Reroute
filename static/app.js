@@ -648,32 +648,62 @@
     document.addEventListener("keydown", (e) => e.key === "Escape" && closeProfile());
   }
 
-  // ---- demo panel: closure builder --------------------------------------------------
-  // Re-run after every htmx swap of #demo-panel, since the picked-line/from/to selects are
-  // fresh elements each time the panel re-renders.
-  function initDemoPanel() {
-    const lineSelect = document.querySelector(".demo-line-select");
-    const fromSelect = document.querySelector('.demo-station-select[data-role="from"]');
-    const toSelect = document.querySelector('.demo-station-select[data-role="to"]');
-    if (!lineSelect || !fromSelect || !toSelect) return;
-    lineSelect.addEventListener("change", () => {
-      const lineId = lineSelect.value;
-      const onLine = STATIONS.filter((s) => s.lines.includes(lineId)).sort((a, b) => a.name.localeCompare(b.name));
-      for (const sel of [fromSelect, toSelect]) {
-        sel.replaceChildren(sel.firstElementChild); // keep the "From…" / "To…" placeholder
-        sel.value = "";
-        sel.disabled = !lineId;
-        for (const s of onLine) {
-          const opt = document.createElement("option");
-          opt.value = s.id;
-          opt.textContent = s.name;
-          sel.append(opt);
+  // ---- demo mode dialog ---------------------------------------------------------------
+
+  const demoDialog = document.getElementById("demo-dialog");
+  if (demoDialog) {
+    // Delegated: the badge and menu item are replaced out-of-band on every /demo/* response.
+    document.addEventListener("click", (e) => {
+      if (e.target.closest("[data-open-demo]")) {
+        if (profileCard && !profileCard.hidden) profileToggle.click();
+        if (!demoDialog.open) demoDialog.showModal();
+      } else if (e.target.closest("[data-close-demo]") || e.target === demoDialog) {
+        demoDialog.close();
+      }
+    });
+
+    // The From/To pickers are filled in running order along the chosen line, fetched per line.
+    const stopsCache = new Map();
+    const option = (value, text) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = text;
+      return o;
+    };
+    demoDialog.addEventListener("change", async (e) => {
+      const form = e.target.closest(".demo-custom");
+      if (!form) return;
+      const from = form.querySelector('[data-role="from"]');
+      const to = form.querySelector('[data-role="to"]');
+      if (e.target.name === "lineId") {
+        const lineId = e.target.value;
+        from.replaceChildren(option("", "Loading stations\u2026"));
+        to.replaceChildren(option("", "\u2014"));
+        from.disabled = to.disabled = true;
+        try {
+          if (!stopsCache.has(lineId)) {
+            const res = await fetch(`/demo/lines/${encodeURIComponent(lineId)}/stops`);
+            if (!res.ok) throw new Error(String(res.status));
+            stopsCache.set(lineId, await res.json());
+          }
+          if (e.target.value !== lineId) return; // a newer pick superseded this one
+          const stops = stopsCache.get(lineId);
+          from.replaceChildren(option("", "Whole line"), ...stops.map((s) => option(s.id, s.name)));
+          to.replaceChildren(option("", "\u2014"), ...stops.map((s) => option(s.id, s.name)));
+          from.disabled = false;
+        } catch {
+          from.replaceChildren(option("", "Whole line (stations unavailable)"));
         }
+      } else if (e.target === from) {
+        // "Whole line" has no end station; a stretch needs one.
+        to.disabled = !from.value;
+        to.required = !!from.value;
+        if (!from.value) to.value = "";
+        for (const o of to.options) o.disabled = !!o.value && o.value === from.value;
+        if (from.value && !to.value) to.focus();
       }
     });
   }
-  initDemoPanel();
-  document.body.addEventListener("htmx:afterSwap", initDemoPanel);
 
   document.querySelectorAll(".combo").forEach(setupCombo);
   form.querySelector(".swap").addEventListener("click", () => {
