@@ -42,6 +42,12 @@ prewarm(config);
 
 const app = new Hono();
 
+// Unversioned URLs, so make browsers revalidate: a heuristically cached app.css from before
+// a markup change leaves new elements unstyled.
+app.use("/static/*", async (c, next) => {
+  await next();
+  c.header("Cache-Control", "no-cache");
+});
 app.use("/static/*", serveStatic({ root: "./" }));
 
 app.get("/", (c) => c.html(page(activeDemo())));

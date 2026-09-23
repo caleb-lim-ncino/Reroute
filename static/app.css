@@ -244,7 +244,7 @@ body > header.topbar::before {
     bottom: auto;
     top: calc(100% + .7rem);
     right: 0;
-    width: 290px;
+    width: 344px;
     border-radius: .8rem;
     box-shadow: var(--shadow-lg);
     padding: 1.1rem 1.1rem .6rem;
@@ -371,7 +371,7 @@ body > header.topbar::before {
 .profile-demo:hover { background: var(--hover); color: var(--fg-strong); }
 .profile-demo .link-icon { background: rgba(245, 158, 11, .14); color: var(--amber); }
 .profile-demo-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.25; }
-.profile-demo-text small { font-size: .76rem; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.profile-demo-text small { font-size: .76rem; color: var(--fg-muted); overflow-wrap: anywhere; }
 @media (min-width: 720px) {
   .profile-demo { width: calc(100% + 2.2rem); margin-inline: -1.1rem; padding: .5rem 1.1rem; font-size: .88rem; }
 }
