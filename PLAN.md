@@ -308,9 +308,21 @@ Found during the build (steps 1–6):
 - **Latency is model-bound**, not spawn-bound: ~17s total, ~13s of it in the API across
   6–7 sequential turns. Pre-warming with `startup()` would save only ~3s, and its handle is
   single-use, so it isn't wired in.
-- **The alternative route can hallucinate.** TfL's planner returns routes for the normal
-  network, so when the usual line is disrupted the model sometimes invents an alternative
-  it has no data for (it once put Vauxhall on the Northern line).
+- **The Journey Planner is disruption-aware.** Asked "now", it silently routes around a
+  suspended line, so its fastest option is a detour, not the usual route. With the Windrush
+  line suspended, Canada Water → Crystal Palace came back as a 64-min Jubilee/Northern/
+  Victoria/bus trip and the agent said "route holds up". Fix: `get_journey_options` also
+  asks for the same London time one week ahead (rounded to 15 min so it caches) and
+  returns `usual` (normal day) next to `live` (right now), with TfL's per-leg
+  `isDisrupted`. Caveat: if next week has planned works, the baseline inherits them.
+- **The alternative route can hallucinate.** Before the `usual`/`live` split the model
+  sometimes invented an alternative it had no data for (it once put Vauxhall on the
+  Northern line). Now it must pick a `live` option by index (`recommended_live_option`),
+  and the page draws that exact TfL journey rather than trusting the prose.
+- **`/StopPoint/Mode/{modes}` times out** (504 after ~60s). The autocomplete index is
+  built from `/Line/{id}/StopPoints` per line instead: ~420 stations in ~1s, merged per hub.
+- **Live crowding (`/crowding/{naptan}/Live`) only covers Underground (940G…) ids.**
+  Everything else returns `dataAvailable: false`; the chip just doesn't render.
 - **The SDK's `env` option replaces the subprocess environment** instead of merging.
   `agent.ts` builds it explicitly, drops empty values (an empty `AWS_ACCESS_KEY_ID` shadows
   the SSO profile), and pins every model slot to the verdict profile ARN.

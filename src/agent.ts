@@ -1,17 +1,18 @@
 import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Config } from "./config.ts";
 import { Verdict, verdictJsonSchema } from "./schema.ts";
+import { advance } from "./progress.ts";
 import { createTflServer, TFL_SERVER_NAME } from "./tools.ts";
 import { recordUsage, usageSummary } from "./usage.ts";
 
 const SYSTEM_PROMPT = `You check whether a London commuter's usual Tube route still holds up right now.
 
 Steps:
-1. Resolve both stations with resolve_station. If a name is ambiguous, pick the station a commuter most plausibly means.
+1. Resolve both stations with resolve_station. If a name is ambiguous, pick the station a commuter most plausibly means. If a station comes with a StopPoint id, use that id directly and don't resolve it.
 2. Plan the journey with get_journey_options. "usual" is the route on a normal day: that is the route you are checking. "live" is what TfL's planner suggests right now, and it already routes around known disruptions. So if the fastest live option differs from usual, or is much slower, or any leg has isDisrupted true, that is evidence the usual route is hit. Note every line the usual route's legs use (if usual is null, fall back to the fastest live option and lower confidence to medium).
 3. Call get_line_status once, with all of those lines.
 4. If any line is below Good Service, judge whether the commuter would actually notice. Minor Delays on a short leg barely matter; Severe Delays, a part closure, or a suspension on a leg they ride — especially the interchange line — does. Call get_line_disruption_detail when the cause changes the answer: planned engineering is predictable, a signal failure is not.
-5. Only when the disruption is noticeable, recommend the fastest live option that avoids the disrupted section, and estimate minutes_lost as its duration minus the usual duration. Never invent a route that isn't one of the live options.
+5. Only when the disruption is noticeable, recommend the fastest live option that avoids the disrupted section: set recommended_live_option to its index, and estimate minutes_lost as its duration minus the usual duration. Never invent a route that isn't one of the live options. When the usual route holds, recommended_live_option is null.
 
 Make independent tool calls in parallel (e.g. both resolve_station calls at once).
 
@@ -29,7 +30,29 @@ export interface VerdictRun {
   costUsd: number;
   // Present when the agent couldn't produce a trustworthy verdict; the verdict is then a safe fallback.
   failure?: string;
+  // The StopPoint ids the agent planned between, so the page can draw the exact route.
+  journey?: { fromId: string; toId: string };
 }
+
+export interface StationInput {
+  name: string;
+  // Set when the commuter picked from the autocomplete; saves the agent a resolve turn.
+  id?: string;
+}
+
+export interface RunOptions {
+  // Request id for the page's progress gauge.
+  rid?: string;
+}
+
+// Which gauge stage each tool call means. StructuredOutput is the SDK's final-answer tool.
+const TOOL_STAGE: Record<string, number> = {
+  [`mcp__${TFL_SERVER_NAME}__resolve_station`]: 0,
+  [`mcp__${TFL_SERVER_NAME}__get_journey_options`]: 1,
+  [`mcp__${TFL_SERVER_NAME}__get_line_status`]: 2,
+  [`mcp__${TFL_SERVER_NAME}__get_line_disruption_detail`]: 3,
+  StructuredOutput: 4,
+};
 
 function fallback(): Verdict {
   return {
@@ -38,8 +61,11 @@ function fallback(): Verdict {
     confidence: "low",
     minutes_lost: 0,
     alternative_summary: null,
+    recommended_live_option: null,
   };
 }
+
+const describe = (s: StationInput) => (s.id ? `${s.name} [StopPoint ${s.id}]` : s.name);
 
 // The SDK's `env` option replaces the subprocess environment rather than merging, so build
 // it explicitly. Empty values are dropped: an empty AWS_ACCESS_KEY_ID from .env would
@@ -72,15 +98,24 @@ function subprocessEnv(config: Config): Record<string, string> {
   return env;
 }
 
-export async function runVerdict(from: string, to: string, config: Config): Promise<VerdictRun> {
+export async function runVerdict(
+  fromInput: StationInput,
+  toInput: StationInput,
+  config: Config,
+  opts: RunOptions = {},
+): Promise<VerdictRun> {
   const started = Date.now();
+  const from = fromInput.name;
+  const to = toInput.name;
   const rates = { inputPerMtok: config.rateInputPerMtok, outputPerMtok: config.rateOutputPerMtok };
   let result: SDKResultMessage | undefined;
   let thrown: unknown;
+  let journey: VerdictRun["journey"];
+  if (opts.rid) advance(opts.rid, fromInput.id && toInput.id ? 1 : 0);
 
   try {
     for await (const message of query({
-      prompt: `Current time: ${new Date().toISOString()}\nFrom: ${from}\nTo: ${to}`,
+      prompt: `Current time: ${new Date().toISOString()}\nFrom: ${describe(fromInput)}\nTo: ${describe(toInput)}`,
       options: {
         model: config.verdictModelId,
         systemPrompt: SYSTEM_PROMPT,
@@ -98,6 +133,16 @@ export async function runVerdict(from: string, to: string, config: Config): Prom
       },
     })) {
       if (message.type === "result") result = message;
+      if (message.type !== "assistant") continue;
+      for (const block of message.message.content) {
+        if (block.type !== "tool_use") continue;
+        const stage = TOOL_STAGE[block.name];
+        if (opts.rid && stage !== undefined) advance(opts.rid, stage);
+        if (block.name.endsWith("__get_journey_options")) {
+          const input = block.input as { fromId?: string; toId?: string };
+          if (input.fromId && input.toId) journey = { fromId: input.fromId, toId: input.toId };
+        }
+      }
     }
   } catch (err) {
     // A single-shot query() throws after yielding an error result; keep the result if we got one.
@@ -109,7 +154,7 @@ export async function runVerdict(from: string, to: string, config: Config): Prom
     costUsd += recordUsage(model, u, rates);
   }
   const durationMs = Date.now() - started;
-  const base = { model: config.verdictModelId, durationMs, costUsd };
+  const base = { model: config.verdictModelId, durationMs, costUsd, journey };
 
   let failure: string | undefined;
   if (result?.subtype === "success" && result.structured_output !== undefined) {

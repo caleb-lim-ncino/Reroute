@@ -23,6 +23,7 @@ export interface TflStopPoint {
 
 export interface TflPlace {
   commonName: string;
+  naptanId?: string;
 }
 
 export interface TflLineIdentifier {
@@ -33,6 +34,7 @@ export interface TflLineIdentifier {
 export interface TflRouteOption {
   name: string;
   lineIdentifier?: TflLineIdentifier;
+  directions?: string[];
 }
 
 export interface TflJourneyLeg {
@@ -42,10 +44,16 @@ export interface TflJourneyLeg {
   arrivalPoint: TflPlace;
   routeOptions?: TflRouteOption[];
   isDisrupted?: boolean;
+  departureTime?: string;
+  arrivalTime?: string;
+  instruction?: { summary: string; detailed: string };
+  path?: { stopPoints?: unknown[] };
 }
 
 export interface TflJourney {
   duration: number;
+  startDateTime?: string;
+  arrivalDateTime?: string;
   legs: TflJourneyLeg[];
 }
 
@@ -83,6 +91,16 @@ export interface TflLiveCrowding {
   timeUtc: string | null;
 }
 
+export interface TflArrival {
+  lineId: string;
+  lineName: string;
+  platformName: string;
+  destinationName: string;
+  towards?: string;
+  timeToStation: number;
+  currentLocation?: string;
+}
+
 export interface TflDisruption {
   category: string;
   type: string;
@@ -108,6 +126,7 @@ export interface JourneyLegProjection {
   departurePoint: string;
   arrivalPoint: string;
   duration: number;
+  instruction: string | null;
   // TfL's own flag: the planner knows of a disruption affecting this leg right now.
   isDisrupted: boolean;
 }

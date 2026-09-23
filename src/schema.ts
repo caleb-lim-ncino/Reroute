@@ -9,6 +9,12 @@ export const Verdict = z.object({
     .string()
     .nullable()
     .describe("Short description of the best alternative route, null if not needed"),
+  recommended_live_option: z
+    .number()
+    .int()
+    .min(0)
+    .nullable()
+    .describe("Index into the live journey options of the route you recommend taking; null means take the usual route"),
 });
 
 export type Verdict = z.infer<typeof Verdict>;

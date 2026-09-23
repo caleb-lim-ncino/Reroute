@@ -20,7 +20,7 @@ const pairs: Array<[string, string]> =
 
 for (const [from, to] of pairs) {
   console.log(`\n=== ${from} -> ${to} ===`);
-  const run = await runVerdict(from, to, config);
+  const run = await runVerdict({ name: from }, { name: to }, config);
   console.log(JSON.stringify(run, null, 2));
 }
 

@@ -50,3 +50,5 @@ export class TtlCache {
 }
 
 export const tflCache = new TtlCache();
+// Departure boards and crowding refresh every ~20s on the page; 45s would freeze them.
+export const liveCache = new TtlCache(15_000);

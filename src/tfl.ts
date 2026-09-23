@@ -1,4 +1,4 @@
-import { tflCache, type Cached } from "./cache.ts";
+import { liveCache, tflCache, type Cached, type TtlCache } from "./cache.ts";
 import type {
   DisruptionProjection,
   JourneyLegProjection,
@@ -9,9 +9,11 @@ import type {
   ResolveStationResult,
   StationMatch,
   TflDisruption,
+  TflArrival,
   TflJourney,
   TflJourneyResultsResponse,
   TflLine,
+  TflLiveCrowding,
   TflStopPoint,
   TflStopPointMatch,
   TflStopPointSearchResponse,
@@ -43,13 +45,18 @@ function appendAppKey(url: URL, appKey: string): void {
  * Cached, timeout-guarded fetch. Every TfL call in this module funnels through here, so
  * caching and the 8s abort apply uniformly across all four functions.
  */
-async function fetchTfl<T>(path: string, params: Record<string, string> = {}, appKey = ""): Promise<Cached<T>> {
+async function fetchTfl<T>(
+  path: string,
+  params: Record<string, string> = {},
+  appKey = "",
+  cache: TtlCache = tflCache,
+): Promise<Cached<T>> {
   const url = new URL(`${BASE_URL}${path}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   appendAppKey(url, appKey);
 
   const cacheKey = url.toString();
-  const cached = tflCache.get<T>(cacheKey);
+  const cached = cache.get<T>(cacheKey);
   if (cached !== undefined) return cached;
 
   let response: Response;
@@ -71,7 +78,7 @@ async function fetchTfl<T>(path: string, params: Record<string, string> = {}, ap
   }
 
   const data = (await response.json()) as T;
-  return tflCache.set(cacheKey, data);
+  return cache.set(cacheKey, data);
 }
 
 function oldest(...timestamps: string[]): string {
@@ -145,7 +152,9 @@ function sameTimeNextWeek(now = new Date()): { date: string; time: string } {
       .formatToParts(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
       .map((p) => [p.type, p.value]),
   );
-  return { date: `${parts.year}${parts.month}${parts.day}`, time: `${parts.hour}${parts.minute}` };
+  // 15-minute slots keep the URL, and so the cache key, stable across a demo session.
+  const minute = String(Math.floor(Number(parts.minute) / 15) * 15).padStart(2, "0");
+  return { date: `${parts.year}${parts.month}${parts.day}`, time: `${parts.hour}${minute}` };
 }
 
 function projectJourney(journey: TflJourney): JourneyOptionProjection {
@@ -160,21 +169,26 @@ function projectJourney(journey: TflJourney): JourneyOptionProjection {
         departurePoint: leg.departurePoint.commonName,
         arrivalPoint: leg.arrivalPoint.commonName,
         duration: leg.duration,
+        instruction: leg.instruction?.detailed ?? null,
         isDisrupted: leg.isDisrupted ?? false,
       };
     }),
   };
 }
 
-export async function getJourneyOptions(
-  fromId: string,
-  toId: string,
-  appKey = "",
-): Promise<JourneyOptionsResult> {
+export interface JourneyPlan {
+  usual: TflJourney | null;
+  live: TflJourney[];
+  fetchedAt: string;
+}
+
+// Raw journeys, for the page's itinerary. Same URLs as the model's tool call, so rendering
+// the route after a verdict is a cache hit, and the page shows exactly what the model saw.
+export async function getJourneyPlan(fromId: string, toId: string, appKey = ""): Promise<JourneyPlan> {
   const path = `/Journey/JourneyResults/${encodeURIComponent(fromId)}/to/${encodeURIComponent(toId)}`;
   const [live, baseline] = await Promise.all([
     fetchTfl<TflJourneyResultsResponse>(path, { mode: JOURNEY_MODES }, appKey),
-    // A failed baseline shouldn't sink the live answer; `usual: null` tells the model.
+    // A failed baseline shouldn't sink the live answer; `usual: null` says so downstream.
     fetchTfl<TflJourneyResultsResponse>(path, { mode: JOURNEY_MODES, ...sameTimeNextWeek() }, appKey).catch(
       () => undefined,
     ),
@@ -187,12 +201,19 @@ export async function getJourneyOptions(
       "http",
     );
   }
+  return { usual: baseline?.value.journeys?.[0] ?? null, live: live.value.journeys, fetchedAt: live.fetchedAt };
+}
 
-  const usual = baseline?.value.journeys?.[0];
+export async function getJourneyOptions(
+  fromId: string,
+  toId: string,
+  appKey = "",
+): Promise<JourneyOptionsResult> {
+  const plan = await getJourneyPlan(fromId, toId, appKey);
   return {
-    usual: usual ? projectJourney(usual) : null,
-    live: live.value.journeys.map(projectJourney),
-    fetchedAt: live.fetchedAt,
+    usual: plan.usual ? projectJourney(plan.usual) : null,
+    live: plan.live.map(projectJourney),
+    fetchedAt: plan.fetchedAt,
   };
 }
 
@@ -239,4 +260,16 @@ export async function getLineDisruptionDetail(lineId: string, appKey = ""): Prom
   }
 
   return { disruptions: [...byDescription.values()], fetchedAt };
+}
+
+// ---- page-only data: departure boards and crowding ------------------------------------
+
+export async function getArrivals(stopId: string, appKey = ""): Promise<Cached<TflArrival[]>> {
+  return fetchTfl<TflArrival[]>(`/StopPoint/${encodeURIComponent(stopId)}/Arrivals`, {}, appKey, liveCache);
+}
+
+// Live crowding exists only for Underground stations (940G…); anything else reports
+// dataAvailable: false, so callers don't need to special-case it.
+export async function getLiveCrowding(stopId: string, appKey = ""): Promise<Cached<TflLiveCrowding>> {
+  return fetchTfl<TflLiveCrowding>(`/crowding/${encodeURIComponent(stopId)}/Live`, {}, appKey, liveCache);
 }
