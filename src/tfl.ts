@@ -1,5 +1,6 @@
 import { liveCache, tflCache, type Cached, type TtlCache } from "./cache.ts";
 import type {
+  BikePointAvailability,
   DisruptionProjection,
   JourneyLegProjection,
   JourneyOptionProjection,
@@ -10,6 +11,7 @@ import type {
   RouteComparisonOption,
   RouteComparisonResult,
   StationMatch,
+  TflBikePoint,
   TflDisruption,
   TflArrival,
   TflJourney,
@@ -135,6 +137,11 @@ export async function resolveStation(query: string, appKey = ""): Promise<Resolv
 
 // ---- 2. get_journey_options ----------------------------------------------------------
 
+// "cycle" isn't requested here: empirically, JourneyResults only ever returns a cycling leg
+// when "cycle" is the *sole* mode in the request — paired with anything else (even just
+// "walking") it's silently dropped from every candidate journey, regardless of distance or
+// whether cycling would clearly win. So TfL's planner can't blend a cycle leg into a mixed
+// itinerary; the cycle-only comparison below queries "cycle" alone to get a real answer.
 const JOURNEY_MODES = "tube,bus,walking,overground,dlr,elizabeth-line";
 
 // The Journey Planner is disruption-aware: asked "now", it quietly routes around a
@@ -226,11 +233,62 @@ export async function getJourneyOptions(
   };
 }
 
+// ---- Santander Cycles: cost estimate ---------------------------------------------------
+// TfL's fare API never prices a cycle-hire leg (RouteComparisonOption.fareTotalCost would
+// otherwise be null), so this is our own estimate off the published tariff:
+// https://tfl.gov.uk/modes/cycling/santander-cycles/how-it-works/prices-and-membership
+// Priced against a 24-hour Day Pass: each ride is free for the first hour, then billed at
+// the same per-30-min rate as pay-as-you-go.
+const CYCLE_DAY_PASS_PENCE = 350; // 24-hour Day Pass, unlimited rides
+const CYCLE_DAY_PASS_FREE_MINUTES = 60; // free per ride while on a Day Pass
+const CYCLE_PAYG_PENCE_PER_30MIN = 165; // pay-as-you-go rate, and the Day Pass's overage rate
+// The journey planner never says whether a cycle-hire leg is a classic bike or an e-bike, so
+// the e-bike surcharge is reported as an add-on rather than folded into totalPence.
+const CYCLE_EBIKE_SURCHARGE_DAY_PASS_PENCE = 100; // per ride, on top of the Day Pass
+
+export interface CycleHireCost {
+  dayPassPence: number;
+  usagePence: number;
+  totalPence: number;
+  ebikeSurchargePence: number;
+}
+
+function cycleUsagePence(minutes: number): number {
+  const billable = Math.max(0, minutes - CYCLE_DAY_PASS_FREE_MINUTES);
+  return Math.ceil(billable / 30) * CYCLE_PAYG_PENCE_PER_30MIN;
+}
+
+// One Day Pass covers every hire in the journey, but each cycle-hire leg is its own
+// 60-minutes-free ride — docking and undocking again resets the clock.
+export function estimateCycleHireCost(journey: TflJourney): CycleHireCost | null {
+  const legs = journey.legs.filter((l) => l.mode.id === "cycle");
+  if (legs.length === 0) return null;
+  const usagePence = legs.reduce((sum, l) => sum + cycleUsagePence(l.duration), 0);
+  return {
+    dayPassPence: CYCLE_DAY_PASS_PENCE,
+    usagePence,
+    totalPence: CYCLE_DAY_PASS_PENCE + usagePence,
+    ebikeSurchargePence: legs.length * CYCLE_EBIKE_SURCHARGE_DAY_PASS_PENCE,
+  };
+}
+
+// Folds the cycle-hire estimate into the journey's fare so every caller reading
+// journey.fare (the compare table, the itinerary facts) sees one number, without mutating
+// the cached TfL response object.
+export function withCycleFare(journey: TflJourney): TflJourney {
+  const cycleCost = estimateCycleHireCost(journey);
+  if (!cycleCost) return journey;
+  return { ...journey, fare: { totalCost: (journey.fare?.totalCost ?? 0) + cycleCost.totalPence } };
+}
+
 // ---- page-only: mode-restricted alternatives, to weigh cost/time against the plan ----
 
+// "cycle" must be queried alone — see the note by JOURNEY_MODES above — so there's no
+// "tube,cycle" blended row: TfL's planner has no way to actually produce one.
 const COMPARISON_MODES: Array<{ key: string; label: string; modes: string }> = [
   { key: "tube", label: "Tube only", modes: "tube,walking" },
   { key: "bus", label: "Bus only", modes: "bus,walking" },
+  { key: "cycle", label: "Santander Cycles only", modes: "cycle" },
 ];
 
 async function comparisonOption(
@@ -246,8 +304,9 @@ async function comparisonOption(
       { mode: mode.modes, fares: "true" },
       appKey,
     );
-    const journey = value.journeys?.[0];
-    if (!journey) return undefined;
+    const raw = value.journeys?.[0];
+    if (!raw) return undefined;
+    const journey = withCycleFare(raw);
     return {
       value: {
         key: mode.key,
@@ -378,4 +437,56 @@ export async function getArrivals(stopId: string, lineId = "", appKey = ""): Pro
 // dataAvailable: false, so callers don't need to special-case it.
 export async function getLiveCrowding(stopId: string, appKey = ""): Promise<Cached<TflLiveCrowding>> {
   return fetchTfl<TflLiveCrowding>(`/crowding/${encodeURIComponent(stopId)}/Live`, {}, appKey, liveCache);
+}
+
+function bikePointCounter(bp: TflBikePoint, key: string): number {
+  return Number(bp.additionalProperties.find((p) => p.key === key)?.value ?? 0);
+}
+
+function haversineMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+// A "cycle" leg rides door-to-door, not dock-to-dock, so its departure/arrival points are
+// never themselves BikePoints — the nearest real docking station is a lookup, not a given.
+const MAX_DOCK_DISTANCE_M = 400;
+
+// Stable key for a coordinate, shared with callers so a leg's departurePoint/arrivalPoint
+// can be looked up in the map this returns.
+export const coordKey = (p: { lat: number; lon: number }) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`;
+
+// Live dock/bike counts for the nearest Santander Cycles docking station to each given point,
+// so a cycle leg can say "walk to this dock" and flag "no bikes here"/"no docks there" instead
+// of assuming a dock is always nearby and always stocked.
+export async function getNearestBikePoints(
+  points: Array<{ lat: number; lon: number }>,
+  appKey = "",
+): Promise<Map<string, BikePointAvailability>> {
+  const result = new Map<string, BikePointAvailability>();
+  if (points.length === 0) return result;
+  const { value: all } = await fetchTfl<TflBikePoint[]>("/BikePoint", {}, appKey, liveCache);
+  for (const p of points) {
+    let best: { bp: TflBikePoint; distanceMeters: number } | undefined;
+    for (const bp of all) {
+      const distanceMeters = haversineMeters(p, bp);
+      if (distanceMeters <= MAX_DOCK_DISTANCE_M && (!best || distanceMeters < best.distanceMeters)) {
+        best = { bp, distanceMeters };
+      }
+    }
+    if (best) {
+      result.set(coordKey(p), {
+        id: best.bp.id,
+        name: best.bp.commonName,
+        bikes: bikePointCounter(best.bp, "NbBikes"),
+        emptyDocks: bikePointCounter(best.bp, "NbEmptyDocks"),
+        distanceMeters: Math.round(best.distanceMeters),
+      });
+    }
+  }
+  return result;
 }

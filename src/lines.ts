@@ -35,6 +35,7 @@ export const LINE_STYLES: Record<string, LineStyle> = {
 const MODE_STYLES: Record<string, LineStyle> = {
   bus: { name: "Bus", colour: "#DC241F", ink: LIGHT },
   walking: { name: "Walk", colour: "#E4E4E4", ink: DARK },
+  cycle: { name: "Cycle", colour: "#EC0000", ink: LIGHT },
 };
 
 const FALLBACK: LineStyle = { name: "", colour: "#6B6B6B", ink: LIGHT };

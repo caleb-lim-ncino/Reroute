@@ -1222,6 +1222,9 @@ button.link:hover { color: var(--blue); }
 .tube-lines { display: inline-flex; align-items: center; gap: .2rem; flex-wrap: wrap; }
 .tube-line-dot { width: .3rem; height: 1rem; border-radius: .12rem; background: var(--c, #777); box-shadow: 0 0 0 1px var(--edge); flex: none; }
 .warn { background: var(--red-fill); color: #fff; font-size: .7rem; font-weight: 700; padding: .05rem .4rem; border-radius: .2rem; }
+.step-cycle { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .3rem; }
+.cycle-ok { color: var(--green); font-size: .75rem; font-weight: 600; }
+.cycle-pass { color: var(--fg-muted); font-size: .75rem; }
 
 /* ---- compare: other ways to go, as tappable cards ---- */
 .compare { padding: 0 1rem 1rem; }

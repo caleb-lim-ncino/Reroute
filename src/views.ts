@@ -5,7 +5,8 @@ import { combinedLineStyle, lineStyle, LINE_STYLES } from "./lines.ts";
 import { STAGES } from "./progress.ts";
 import { cleanName, stationById } from "./stations.ts";
 import type { TflArrival, TflJourney, TflJourneyLeg, TflLiveCrowding } from "./tfl-types.ts";
-import type { LineStatusProjection, RouteComparisonOption } from "./tfl-types.ts";
+import type { BikePointAvailability, LineStatusProjection, RouteComparisonOption } from "./tfl-types.ts";
+import { coordKey, estimateCycleHireCost } from "./tfl.ts";
 import type { usageSummary } from "./usage.ts";
 
 function esc(s: string): string {
@@ -321,6 +322,9 @@ export interface CardExtras {
   route?: { journey: TflJourney; label: string; live: boolean; usualMinutes?: number };
   // Bus-only / tube-only alternatives, so a commuter can weigh cost and time against the plan.
   compare?: RouteComparisonOption[];
+  // Live dock/bike counts for any Santander Cycles docking station a cycle-hire leg touches,
+  // keyed by BikePoint id ("BikePoints_123").
+  cycleAvailability?: Map<string, BikePointAvailability>;
 }
 
 const formatFare = (pence: number | null | undefined) => (pence == null ? null : `£${(pence / 100).toFixed(2)}`);
@@ -377,8 +381,8 @@ export function verdictCard(from: string, to: string, run: VerdictRun, extras: C
     ${route ? lineStrip(route.journey) : ""}
   </header>
   ${note || v.alternative_summary ? `<div class="verdict-notes">${note ? `<p>${esc(note)}</p>` : ""}${v.alternative_summary ? `<p><strong>Alternative:</strong> ${esc(v.alternative_summary)}</p>` : ""}</div>` : ""}
-  ${route ? `<div class="verdict-body">${boardSlot(route.journey)}${itinerary(route.journey, route.label, route.live, status !== "clear")}</div>` : ""}
-  ${extras.compare?.length ? compareOptions(route, extras.compare) : ""}
+  ${route ? `<div class="verdict-body">${boardSlot(route.journey)}${itinerary(route.journey, route.label, route.live, status !== "clear", extras.cycleAvailability)}</div>` : ""}
+  ${extras.compare?.length ? compareOptions(route, extras.compare, extras.cycleAvailability) : ""}
   <footer class="verdict-meta">
     <div class="meta-stat"><small>Checked in</small><span>${(run.durationMs / 1000).toFixed(1)}s</span></div>
   </footer>
@@ -417,7 +421,7 @@ const signed = (n: number, unit: (x: number) => string) => (n === 0 ? "same" : `
 // How this route stacks up against a bus-only or tube-only plan, so a commuter can weigh
 // a few extra minutes against a cheaper or simpler journey. Each option expands into its
 // own step-by-step itinerary — the full journey was already fetched, so opening it is free.
-function compareOptions(route: CardExtras["route"], options: RouteComparisonOption[]): string {
+function compareOptions(route: CardExtras["route"], options: RouteComparisonOption[], availability?: Map<string, BikePointAvailability>): string {
   const baseTime = route?.journey.duration;
   const baseFare = route?.journey.fare?.totalCost ?? null;
   const current = route
@@ -438,7 +442,7 @@ function compareOptions(route: CardExtras["route"], options: RouteComparisonOpti
           <span class="opt-label">${esc(o.label)}${lineStrip(o.journey)}</span>
           <span class="opt-num"><span>${dt}<strong>${o.duration} min</strong></span><span>${df}<small>${esc(formatFare(o.fareTotalCost) ?? "—")}</small></span></span>
         </summary>
-        ${stepsList(o.journey, true, true)}
+        ${stepsList(o.journey, true, true, availability)}
       </details></li>`;
     })
     .join("");
@@ -490,8 +494,36 @@ function stopList(leg: TflJourneyLeg): string {
   </details>`;
 }
 
+// A "cycle" leg rides door-to-door, not dock-to-dock, so its nearest real docking station —
+// where you'd actually unlock or lock a Santander bike — is a lookup keyed by coordinate, not
+// something the leg carries itself. Flags a dock that's currently out of bikes/docks too.
+function dockNote(point: { lat?: number; lon?: number }, kind: "unlock" | "lock", availability?: Map<string, BikePointAvailability>): string {
+  const { lat, lon } = point;
+  const dock = typeof lat === "number" && typeof lon === "number" ? availability?.get(coordKey({ lat, lon })) : undefined;
+  if (!dock) return "";
+  const away = `${dock.distanceMeters}m away`;
+  if (kind === "unlock") {
+    return dock.bikes === 0
+      ? `<span class="warn">No bikes at nearest dock, ${esc(dock.name)}</span>`
+      : `<span class="cycle-ok">Unlock at ${esc(dock.name)} (${dock.bikes} bike${dock.bikes === 1 ? "" : "s"}, ${away})</span>`;
+  }
+  return dock.emptyDocks === 0
+    ? `<span class="warn">No free docks at nearest dock, ${esc(dock.name)}</span>`
+    : `<span class="cycle-ok">Lock at ${esc(dock.name)} (${dock.emptyDocks} free dock${dock.emptyDocks === 1 ? "" : "s"}, ${away})</span>`;
+}
+
+// The Day Pass, any per-30-min overage, and the e-bike surcharge a cycle leg could actually
+// cost on a Santander bike — TfL's fare API never prices these, so a rider would otherwise
+// have no idea a pass is needed or that an e-bike costs extra.
+function cyclePassNote(journey: TflJourney): string {
+  const cost = estimateCycleHireCost(journey);
+  if (!cost) return "";
+  const usage = cost.usagePence > 0 ? `, +${formatFare(cost.usagePence)} over the free 60 min` : "";
+  return `<span class="cycle-pass">Needs a Santander Cycles Day Pass (${formatFare(cost.dayPassPence)}/24hr)${usage} · +${formatFare(cost.ebikeSurchargePence)} if using an e-bike</span>`;
+}
+
 // The leg-by-leg list shared by the main itinerary and an expanded compare-table option.
-function stepsList(journey: TflJourney, live: boolean, warnLegs: boolean): string {
+function stepsList(journey: TflJourney, live: boolean, warnLegs: boolean, availability?: Map<string, BikePointAvailability>): string {
   const steps = journey.legs
     .map((leg) => {
       const lineIds = (leg.routeOptions ?? []).map((r) => r.lineIdentifier?.id);
@@ -503,10 +535,19 @@ function stepsList(journey: TflJourney, live: boolean, warnLegs: boolean): strin
         leg.mode.id !== "walking" && stops ? `${stops} stop${stops === 1 ? "" : "s"}` : "",
       ].filter(Boolean);
       const instruction = leg.instruction?.detailed ?? leg.instruction?.summary ?? "";
+      const cycleInfo =
+        leg.mode.id === "cycle"
+          ? `<div class="step-cycle">
+              ${dockNote(leg.departurePoint, "unlock", availability)}
+              ${dockNote(leg.arrivalPoint, "lock", availability)}
+              ${cyclePassNote({ ...journey, legs: [leg] })}
+            </div>`
+          : "";
       return `<li style="--c:${style.colour}"${leg.mode.id === "walking" ? ` class="walking"` : ""}>
         <div class="step-head">${legPill(leg)} <span class="step-from">${esc(cleanName(leg.departurePoint.commonName))}</span> ${crowdSlot(leg.departurePoint.naptanId)}</div>
         <div class="step-body">${esc(instruction)}${warnLegs && leg.isDisrupted ? ` <span class="warn">Disrupted</span>` : ""}</div>
         <div class="step-facts">${facts.map(esc).join(" · ")}</div>
+        ${cycleInfo}
         ${stopList(leg)}
       </li>`;
     })
@@ -519,11 +560,11 @@ function stepsList(journey: TflJourney, live: boolean, warnLegs: boolean): strin
 
 // TfL flags legs isDisrupted for minor notices too; showing that under a "Good service"
 // verdict contradicts the card, so leg warnings only appear when the verdict agrees.
-function itinerary(journey: TflJourney, label: string, live: boolean, warnLegs: boolean): string {
+function itinerary(journey: TflJourney, label: string, live: boolean, warnLegs: boolean, availability?: Map<string, BikePointAvailability>): string {
   const arrive = live && journey.arrivalDateTime ? ` · arrive ${londonTime(journey.arrivalDateTime)}` : "";
   return `<section class="itinerary">
     <h3>${esc(label)} <small>${journey.duration} min${arrive}</small></h3>
-    ${stepsList(journey, live, warnLegs)}
+    ${stepsList(journey, live, warnLegs, availability)}
   </section>`;
 }
 

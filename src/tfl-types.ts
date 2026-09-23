@@ -25,6 +25,10 @@ export interface TflStopPoint {
 export interface TflPlace {
   commonName: string;
   naptanId?: string;
+  // Set for places with no naptanId, e.g. Santander Cycles docking stations ("BikePoints_123").
+  id?: string;
+  lat?: number;
+  lon?: number;
 }
 
 export interface TflLineIdentifier {
@@ -224,4 +228,23 @@ export interface RouteComparisonOption {
 export interface RouteComparisonResult {
   options: RouteComparisonOption[];
   fetchedAt: string;
+}
+
+// ---- page-only: Santander Cycles docking-station availability -------------------------
+
+// /BikePoint, trimmed to the fields we read: location, and the counters in `additionalProperties`.
+export interface TflBikePoint {
+  id: string;
+  commonName: string;
+  lat: number;
+  lon: number;
+  additionalProperties: Array<{ key: string; value: string }>;
+}
+
+export interface BikePointAvailability {
+  id: string;
+  name: string;
+  bikes: number;
+  emptyDocks: number;
+  distanceMeters: number;
 }

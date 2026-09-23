@@ -21,7 +21,15 @@ import {
 import { LINE_STYLES } from "./lines.ts";
 import { cancel, finish, progressOf, STAGES } from "./progress.ts";
 import { startStationIndex, stationById, stations } from "./stations.ts";
-import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding, getRouteComparison } from "./tfl.ts";
+import {
+  getArrivals,
+  getJourneyPlan,
+  getLineStatus,
+  getLiveCrowding,
+  getNearestBikePoints,
+  getRouteComparison,
+  withCycleFare,
+} from "./tfl.ts";
 import type { TflJourney } from "./tfl-types.ts";
 import { usageSummary } from "./usage.ts";
 import {
@@ -128,7 +136,7 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
     if (pick !== null && plan.live[pick]) {
       // TfL's own durations, so "minutes lost" is measured rather than the model's guess.
       return {
-        journey: overrideJourneyDisruption(plan.live[pick]!),
+        journey: overrideJourneyDisruption(withCycleFare(plan.live[pick]!)),
         label: "Take this route instead",
         live: true,
         usualMinutes: plan.usual?.duration,
@@ -136,9 +144,9 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
     }
     if (plan.usual) {
       const today = plan.live.find((j) => signature(j) === signature(plan.usual!));
-      return { journey: overrideJourneyDisruption(today ?? plan.usual), label: "Your route", live: !!today };
+      return { journey: overrideJourneyDisruption(withCycleFare(today ?? plan.usual)), label: "Your route", live: !!today };
     }
-    return { journey: overrideJourneyDisruption(plan.live[0]!), label: "Your route", live: true };
+    return { journey: overrideJourneyDisruption(withCycleFare(plan.live[0]!)), label: "Your route", live: true };
   } catch (err) {
     console.error(`[route] couldn't load itinerary: ${err}`);
     return undefined;
@@ -161,6 +169,32 @@ async function compareFor(run: VerdictRun, route: CardExtras["route"]): Promise<
   }
 }
 
+// A "cycle" leg rides door-to-door, so its endpoints are just wherever the road route starts
+// and ends — never a real docking station. Collect those coordinates, across the recommended
+// route and its alternatives, to look up the nearest actual Santander dock to each.
+function cyclePoints(journeys: (TflJourney | undefined)[]): Array<{ lat: number; lon: number }> {
+  return journeys
+    .flatMap((j) => j?.legs ?? [])
+    .filter((l) => l.mode.id === "cycle")
+    .flatMap((l) => [l.departurePoint, l.arrivalPoint])
+    .filter((p) => typeof p.lat === "number" && typeof p.lon === "number")
+    .map((p) => ({ lat: p.lat!, lon: p.lon! }));
+}
+
+async function cycleAvailabilityFor(
+  route: CardExtras["route"],
+  compare: CardExtras["compare"],
+): Promise<CardExtras["cycleAvailability"]> {
+  const points = cyclePoints([route?.journey, ...(compare ?? []).map((o) => o.journey)]);
+  if (points.length === 0) return undefined;
+  try {
+    return await getNearestBikePoints(points, config.tflAppKey);
+  } catch (err) {
+    console.error(`[cycle] couldn't load dock availability: ${err}`);
+    return undefined;
+  }
+}
+
 app.post("/plan", async (c) => {
   const form = await c.req.parseBody();
   const from = field(form.from);
@@ -177,9 +211,10 @@ app.post("/plan", async (c) => {
     if (run.failure === "cancelled") return c.body(null, 204);
     const route = await routeFor(run);
     const compare = await compareFor(run, route);
+    const cycleAvailability = await cycleAvailabilityFor(route, compare);
     // Lets the usage footer refresh as soon as a verdict lands instead of on the next poll.
     c.header("HX-Trigger", "verdict");
-    return c.html(verdictCard(from, to, run, { route, compare }));
+    return c.html(verdictCard(from, to, run, { route, compare, cycleAvailability }));
   } finally {
     if (rid) finish(rid);
   }
