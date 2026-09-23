@@ -204,10 +204,15 @@
       const tags = document.createElement("span");
       tags.className = "picked-tags";
       tags.append(lines, crowd);
-      const action = document.createElement("span");
-      action.className = "picked-action";
-      action.append(saveControl(fieldName, s));
-      picked.append(tags, action);
+      const control = saveControl(fieldName, s);
+      if (control) {
+        const action = document.createElement("span");
+        action.className = "picked-action";
+        action.append(control);
+        picked.append(tags, action);
+      } else {
+        picked.append(tags);
+      }
       if (s.id.startsWith("940G")) crowd.innerHTML = await crowdingHtml(s.id);
     }
 
@@ -301,15 +306,10 @@
   }
 
   // One contextual action per field: From is usually home, To is usually work. A station
-  // that's already saved shows as a badge instead of offering to save it again.
+  // that's already saved needs no further action, so nothing is shown for it.
   function saveControl(fieldName, s) {
     const savedAs = Object.keys(KINDS).find((k) => store.get(k)?.id === s.id);
-    if (savedAs) {
-      const badge = document.createElement("span");
-      badge.className = `saved-badge ${savedAs}`;
-      badge.append(icon("check"), document.createTextNode(`Your ${savedAs}`));
-      return badge;
-    }
+    if (savedAs) return null;
     const kind = fieldName === "from" ? "home" : "work";
     const b = document.createElement("button");
     b.type = "button";

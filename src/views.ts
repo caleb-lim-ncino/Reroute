@@ -1,6 +1,6 @@
 import type { VerdictRun } from "./agent.ts";
 import type { Verdict } from "./schema.ts";
-import { lineStyle } from "./lines.ts";
+import { combinedLineStyle, lineStyle } from "./lines.ts";
 import { STAGES } from "./progress.ts";
 import { cleanName, stationById } from "./stations.ts";
 import type { TflArrival, TflJourney, TflJourneyLeg, TflLiveCrowding } from "./tfl-types.ts";
@@ -83,7 +83,7 @@ function profileWidget(): string {
       </div>
       <ul class="profile-links">
         ${profileLink("mail", "caleb.lim@ncino.com", "mailto:caleb.lim@ncino.com", false)}
-        ${profileLink("workday", "Workday profile", "https://wd5.myworkday.com/ncino/d/inst/PLACEHOLDER/rel-task/PLACEHOLDER.htmld")}
+        ${profileLink("workday", "Workday profile", "https://wd5.myworkday.com/ncino/d/inst/1$37/247$6568.htmld")}
         ${profileLink("github", "GitHub", "https://github.com/caleb-lim-ncino")}
         ${profileLink("slack", "Slack", "https://ncino.slack.com/team/U0BTQ21PPNC")}
       </ul>
@@ -314,8 +314,8 @@ const londonTime = (iso?: string) => (iso ? iso.slice(11, 16) : "");
 const isUnderground = (id?: string) => !!id && id.startsWith("940G");
 
 function legPill(leg: TflJourneyLeg): string {
-  const lineId = leg.routeOptions?.[0]?.lineIdentifier?.id;
-  const style = lineStyle(lineId, leg.mode.id);
+  const lineIds = (leg.routeOptions ?? []).map((r) => r.lineIdentifier?.id);
+  const style = combinedLineStyle(lineIds, leg.mode.id);
   const label = leg.mode.id === "bus" ? `Bus ${leg.routeOptions?.[0]?.name ?? ""}` : style.name || leg.mode.name;
   return `<span class="pill" style="--c:${style.colour};--ink:${style.ink}">${esc(label.trim())}</span>`;
 }
@@ -332,11 +332,11 @@ function crowdSlot(naptanId?: string): string {
 function stopList(leg: TflJourneyLeg): string {
   const stops = leg.path?.stopPoints ?? [];
   if (leg.mode.id === "walking" || stops.length === 0) return "";
-  const legLineId = leg.routeOptions?.[0]?.lineIdentifier?.id;
-  const style = lineStyle(legLineId, leg.mode.id);
+  const legLineIds = new Set((leg.routeOptions ?? []).map((r) => r.lineIdentifier?.id).filter(Boolean));
+  const style = combinedLineStyle([...legLineIds], leg.mode.id);
   const items = stops
     .map((s) => {
-      const otherLines = (stationById(s.id)?.lines ?? []).filter((l) => l !== legLineId);
+      const otherLines = (stationById(s.id)?.lines ?? []).filter((l) => !legLineIds.has(l));
       const dots = otherLines
         .map((l) => {
           const ls = lineStyle(l);
@@ -356,8 +356,8 @@ function stopList(leg: TflJourneyLeg): string {
 function stepsList(journey: TflJourney, live: boolean, warnLegs: boolean): string {
   const steps = journey.legs
     .map((leg) => {
-      const lineId = leg.routeOptions?.[0]?.lineIdentifier?.id;
-      const style = lineStyle(lineId, leg.mode.id);
+      const lineIds = (leg.routeOptions ?? []).map((r) => r.lineIdentifier?.id);
+      const style = combinedLineStyle(lineIds, leg.mode.id);
       const stops = leg.path?.stopPoints?.length ?? 0;
       const facts = [
         live && leg.departureTime ? londonTime(leg.departureTime) : "",

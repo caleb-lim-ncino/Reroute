@@ -164,10 +164,14 @@ function projectJourney(journey: TflJourney): JourneyOptionProjection {
     duration: journey.duration,
     legs: journey.legs.map((leg): JourneyLegProjection => {
       const primaryRoute = leg.routeOptions?.[0]?.lineIdentifier;
+      const lineNames = Array.from(
+        new Set((leg.routeOptions ?? []).map((r) => r.lineIdentifier?.name).filter((n): n is string => !!n)),
+      );
       return {
         mode: leg.mode.id,
         lineId: primaryRoute?.id ?? null,
         lineName: primaryRoute?.name ?? null,
+        lineNames,
         departurePoint: leg.departurePoint.commonName,
         arrivalPoint: leg.arrivalPoint.commonName,
         duration: leg.duration,

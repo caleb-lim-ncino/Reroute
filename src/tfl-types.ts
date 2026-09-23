@@ -135,6 +135,9 @@ export interface JourneyLegProjection {
   mode: string;
   lineId: string | null;
   lineName: string | null;
+  // All lines sharing this leg's track (e.g. H&C and Circle both run Hammersmith to
+  // Liverpool Street) — lineId/lineName above are just the first of these.
+  lineNames: string[];
   departurePoint: string;
   arrivalPoint: string;
   duration: number;

@@ -334,7 +334,7 @@ body > header.topbar::before {
 /* ---- icons ---- */
 .icon { display: inline-flex; flex: none; width: 1em; height: 1em; }
 .icon svg { width: 100%; height: 100%; }
-.save > .icon, .saved-badge > .icon, button.link > .icon { margin-right: .35rem; }
+.save > .icon, button.link > .icon { margin-right: .35rem; }
 
 main { padding-bottom: 2rem; }
 
@@ -509,18 +509,6 @@ button.link {
 }
 button.link .icon { width: .85rem; height: .85rem; }
 button.link:hover { color: var(--blue); }
-.saved-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: .72rem;
-  font-weight: 700;
-  padding: .15rem .55rem;
-  border-radius: 1rem;
-  color: #fff;
-  background: var(--blue-fill);
-}
-.saved-badge .icon { width: .75rem; height: .75rem; }
-.saved-badge.work { background: var(--red-fill); }
 .picked .save {
   display: inline-flex;
   align-items: center;
@@ -656,7 +644,7 @@ button.link:hover { color: var(--blue); }
 #plan button.go svg { width: 1.1rem; height: 1.1rem; }
 #plan button.go:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--blue) 45%, transparent); }
 #plan button.go:active { transform: scale(.985); }
-#plan button.go:disabled { opacity: 1; box-shadow: none; cursor: progress; }
+#plan button.go:disabled { opacity: .6; box-shadow: none; cursor: progress; filter: grayscale(.3); }
 #plan button.go:disabled svg { animation: nudge .6s ease-in-out infinite alternate; }
 @keyframes nudge { to { translate: .3rem 0; } }
 
@@ -698,16 +686,16 @@ button.link:hover { color: var(--blue); }
 .line-badge { background: var(--blue-fill); color: #fff; font-weight: 700; padding: .1rem .55rem; border-radius: .25rem; font-size: .75rem; letter-spacing: .03em; }
 .cancel-check {
   margin-left: auto;
-  padding: .3rem .8rem;
+  padding: .35rem .9rem;
   border-radius: 1rem;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--red);
   background: var(--surface-2);
-  color: var(--fg-muted);
-  font-size: .78rem;
-  font-weight: 600;
+  color: var(--red);
+  font-size: .8rem;
+  font-weight: 700;
   transition: background .15s, color .15s, border-color .15s;
 }
-.cancel-check:hover { background: var(--hover); color: var(--red); border-color: var(--red); }
+.cancel-check:hover { background: var(--red); color: #fff; border-color: var(--red); }
 .track { position: relative; height: 3.6rem; margin: .6rem .8rem 0; }
 .rail { position: absolute; top: 2.05rem; left: 0; right: 0; height: .5rem; border-radius: .25rem; background: var(--blue-soft); overflow: hidden; }
 .rail-fill { height: 100%; width: calc(var(--pos) * 100%); background: var(--blue); }
@@ -726,7 +714,7 @@ button.link:hover { color: var(--blue); }
 .train {
   position: absolute;
   top: .15rem;
-  left: calc(var(--pos) * 100%);
+  left: clamp(1.7rem, calc(var(--pos) * 100%), calc(100% - 1.7rem));
   width: 3.4rem;
   transform: translateX(-50%);
   animation: bob .5s ease-in-out infinite alternate;

@@ -42,3 +42,15 @@ const FALLBACK: LineStyle = { name: "", colour: "#6B6B6B", ink: LIGHT };
 export function lineStyle(lineId: string | null | undefined, mode?: string): LineStyle {
   return (lineId && LINE_STYLES[lineId]) || (mode && MODE_STYLES[mode]) || FALLBACK;
 }
+
+// A leg's routeOptions lists every line that runs the shared track for that leg (e.g. H&C
+// and Circle both between Hammersmith and Liverpool Street) — not just alternatives. Combine
+// them into one pill instead of showing only the first line TfL happened to list.
+export function combinedLineStyle(lineIds: Array<string | null | undefined>, mode?: string): LineStyle {
+  const ids = Array.from(new Set(lineIds.filter((id): id is string => !!id)));
+  if (ids.length === 0) return lineStyle(null, mode);
+  const styles = ids.map((id) => lineStyle(id, mode));
+  const first = styles[0]!;
+  const name = styles.map((s) => s!.name).join(" & ");
+  return { name, colour: first.colour, ink: first.ink };
+}
