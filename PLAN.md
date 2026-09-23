@@ -29,7 +29,7 @@ No `wrangler.toml`, no `wrangler.jsonc`. `.env` goes in `.gitignore` before anyt
 
 ### 1.2 Bedrock: only **application inference profiles** are invokable
 
-Verified against the `genai` account (`714322698969`, `us-east-1`):
+Verified against the `genai` account (`7XXXXXX9`, `us-east-1`):
 
 - `us.anthropic.claude-haiku-4-5-20251001-v1:0` → `AccessDeniedException`, **explicit deny
   in service control policy** `p-9cv7o7z3`
