@@ -1,6 +1,7 @@
 import type { VerdictRun } from "./agent.ts";
+import { DEMO_PRESETS, type DemoPreset } from "./demo.ts";
 import type { Verdict } from "./schema.ts";
-import { combinedLineStyle, lineStyle } from "./lines.ts";
+import { combinedLineStyle, lineStyle, LINE_STYLES } from "./lines.ts";
 import { STAGES } from "./progress.ts";
 import { cleanName, stationById } from "./stations.ts";
 import type { TflArrival, TflJourney, TflJourneyLeg, TflLiveCrowding } from "./tfl-types.ts";
@@ -62,7 +63,73 @@ function profileLink(icon: keyof typeof LINK_ICONS, label: string, href: string,
   return `<li><a href="${esc(href)}"${external ? ` target="_blank" rel="noopener"` : ""}><span class="link-icon">${LINK_ICONS[icon]}</span>${esc(label)}</a></li>`;
 }
 
-function profileWidget(): string {
+const FLASK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6.5L4.8 18a2 2 0 0 0 1.7 3h11a2 2 0 0 0 1.7-3L14 9.5V3"/><path d="M7.5 14h9"/></svg>`;
+
+// A line-coloured dot so a preset/status reads at a glance, same visual language as the
+// pill swatches elsewhere in the app but compact enough for a list row.
+function lineDot(lineId: string): string {
+  const style = lineStyle(lineId);
+  return `<span class="demo-dot" style="background:${style.colour}"></span>`;
+}
+
+function closureLabel(p: DemoPreset): string {
+  return p.closure ? `${esc(p.closure.fromName)} &rarr; ${esc(p.closure.toName)}` : esc(p.statusSeverityDescription);
+}
+
+// Shown in the header whenever a demo disruption is active, so a screen-share makes clear
+// the data is simulated rather than a real TfL incident. hx-swap-oob lets every /demo/*
+// response update this alongside the panel it was actually targeting.
+export function demoBadge(active: DemoPreset | null): string {
+  if (!active) return `<span id="demo-badge" class="demo-badge" hx-swap-oob="true" hidden></span>`;
+  return `<span id="demo-badge" class="demo-badge" hx-swap-oob="true">${FLASK_ICON}Demo: ${esc(active.lineName)} &ndash; ${closureLabel(active)}</span>`;
+}
+
+// Developer-only panel, tucked into the profile popup: lets a presenter simulate a common
+// disruption, or a closure between two exact stations, on demand instead of hoping one is
+// happening live during a demo.
+export function demoPanel(active: DemoPreset | null): string {
+  const presets = DEMO_PRESETS.map(
+    (p) => `<button type="button" class="demo-preset" hx-post="/demo/${esc(p.id)}" hx-target="#demo-panel" hx-swap="outerHTML" ${active?.id === p.id ? 'aria-current="true"' : ""}>
+      ${lineDot(p.lineId)}<span class="demo-preset-text">${esc(p.lineName)} <small>${esc(p.statusSeverityDescription)}</small></span>
+    </button>`,
+  ).join("");
+  const lineOptions = Object.entries(LINE_STYLES)
+    .map(([id, s]) => `<option value="${esc(id)}">${esc(s.name)}</option>`)
+    .join("");
+  return `<div id="demo-panel" class="demo-panel">
+    <div class="demo-head"><span class="demo-head-icon">${FLASK_ICON}</span>Demo mode</div>
+    <p class="demo-status ${active ? "is-active" : ""}"><span class="demo-status-dot"></span>${
+      active
+        ? `Active: <strong>${esc(active.lineName)} &ndash; ${closureLabel(active)}</strong>`
+        : "No simulated disruption active."
+    }</p>
+    <div class="demo-actions">
+      <button type="button" class="demo-random" hx-post="/demo/random" hx-target="#demo-panel" hx-swap="outerHTML">Simulate random disruption</button>
+      <button type="button" class="demo-clear" hx-post="/demo/clear" hx-target="#demo-panel" hx-swap="outerHTML" ${active ? "" : "disabled"}>Clear</button>
+    </div>
+    <div class="demo-subhead">Quick presets</div>
+    <div class="demo-presets">${presets}</div>
+    <div class="demo-subhead">Closure between two stations</div>
+    <form class="demo-closure-form" hx-post="/demo/closure" hx-target="#demo-panel" hx-swap="outerHTML">
+      <select name="lineId" class="demo-line-select" required>
+        <option value="" disabled selected>Line&hellip;</option>
+        ${lineOptions}
+      </select>
+      <div class="demo-closure-stations">
+        <select name="fromId" class="demo-station-select" data-role="from" required disabled>
+          <option value="" disabled selected>From&hellip;</option>
+        </select>
+        <span class="demo-closure-arrow" aria-hidden="true">&rarr;</span>
+        <select name="toId" class="demo-station-select" data-role="to" required disabled>
+          <option value="" disabled selected>To&hellip;</option>
+        </select>
+      </div>
+      <button type="submit" class="demo-closure-submit">Simulate closure</button>
+    </form>
+  </div>`;
+}
+
+function profileWidget(active: DemoPreset | null): string {
   const photo =
     "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:cb6016a1-b4a7-4694-9440-9a98b39fe727/33d50698-1ab5-40ac-887a-9c12422cbac1/128";
   return `<div class="profile">
@@ -87,6 +154,8 @@ function profileWidget(): string {
         ${profileLink("github", "GitHub", "https://github.com/caleb-lim-ncino")}
         ${profileLink("slack", "Slack", "https://ncino.slack.com/team/U0BTQ21PPNC")}
       </ul>
+      <hr class="profile-divider">
+      ${demoPanel(active)}
     </div>
   </div>`;
 }
@@ -105,7 +174,7 @@ function combo(field: "from" | "to", placeholder: string): string {
     </div>`;
 }
 
-export function page(): string {
+export function page(activeDemo: DemoPreset | null = null): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -137,8 +206,9 @@ export function page(): string {
   <header class="topbar">
     <div class="brand">${ROUNDEL}<div><h1>Reroute</h1><p>Does your usual Tube route still hold up right now?</p></div></div>
     <div class="topbar-actions">
+      ${demoBadge(activeDemo)}
       ${themeToggle()}
-      ${profileWidget()}
+      ${profileWidget(activeDemo)}
     </div>
   </header>
   <main>
@@ -231,8 +301,13 @@ export function verdictCard(from: string, to: string, run: VerdictRun, extras: C
 
   return `<article class="verdict" data-status="${status}">
   <header class="verdict-hero">
-    <div class="hero-top"><span class="status-pill">${headline}</span><span class="hero-route">${esc(from)} <span aria-hidden="true">→</span><span class="sr-only">to</span> ${esc(to)}</span></div>
+    <div class="hero-top">
+      <span class="status-pill">${headline}</span>
+      <span class="hero-route">${esc(from)} <span aria-hidden="true">→</span><span class="sr-only">to</span> ${esc(to)}</span>
+      <span class="hero-stats">${confidenceGauge(v.confidence)}<span class="hero-cost" title="Cost of this check">$${run.costUsd.toFixed(4)}</span></span>
+    </div>
     <p class="verdict-text">${esc(v.verdict)}</p>
+    ${run.failure ? `<p class="verdict-error">Couldn't verify: ${esc(run.failure)}</p>` : ""}
     ${route ? facts(route.journey, route.live, status === "disrupted" ? lost : undefined) : ""}
     ${route ? lineStrip(route.journey) : ""}
   </header>
@@ -240,9 +315,7 @@ export function verdictCard(from: string, to: string, run: VerdictRun, extras: C
   ${route ? `<div class="verdict-body">${boardSlot(route.journey)}${itinerary(route.journey, route.label, route.live, status !== "clear")}</div>` : ""}
   ${extras.compare?.length ? compareOptions(route, extras.compare) : ""}
   <footer class="verdict-meta">
-    <div class="meta-stat">${confidenceGauge(v.confidence)}</div>
     <div class="meta-stat"><small>Checked in</small><span>${(run.durationMs / 1000).toFixed(1)}s</span></div>
-    <div class="meta-stat"><small>Cost</small><span>$${run.costUsd.toFixed(4)}</span></div>
   </footer>
 </article>`;
 }

@@ -313,7 +313,7 @@
     const kind = fieldName === "from" ? "home" : "work";
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "save outline";
+    b.className = `save ${kind}`;
     b.append(icon(kind), document.createTextNode(store.get(kind) ? `Make this ${kind}` : `Save as ${kind}`));
     b.addEventListener("click", () => saveStation(kind, s));
     return b;
@@ -647,6 +647,33 @@
     });
     document.addEventListener("keydown", (e) => e.key === "Escape" && closeProfile());
   }
+
+  // ---- demo panel: closure builder --------------------------------------------------
+  // Re-run after every htmx swap of #demo-panel, since the picked-line/from/to selects are
+  // fresh elements each time the panel re-renders.
+  function initDemoPanel() {
+    const lineSelect = document.querySelector(".demo-line-select");
+    const fromSelect = document.querySelector('.demo-station-select[data-role="from"]');
+    const toSelect = document.querySelector('.demo-station-select[data-role="to"]');
+    if (!lineSelect || !fromSelect || !toSelect) return;
+    lineSelect.addEventListener("change", () => {
+      const lineId = lineSelect.value;
+      const onLine = STATIONS.filter((s) => s.lines.includes(lineId)).sort((a, b) => a.name.localeCompare(b.name));
+      for (const sel of [fromSelect, toSelect]) {
+        sel.replaceChildren(sel.firstElementChild); // keep the "From…" / "To…" placeholder
+        sel.value = "";
+        sel.disabled = !lineId;
+        for (const s of onLine) {
+          const opt = document.createElement("option");
+          opt.value = s.id;
+          opt.textContent = s.name;
+          sel.append(opt);
+        }
+      }
+    });
+  }
+  initDemoPanel();
+  document.body.addEventListener("htmx:afterSwap", initDemoPanel);
 
   document.querySelectorAll(".combo").forEach(setupCombo);
   form.querySelector(".swap").addEventListener("click", () => {

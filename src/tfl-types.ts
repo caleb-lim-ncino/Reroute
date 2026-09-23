@@ -80,6 +80,11 @@ export interface TflLineStatus {
   statusSeverity: number;
   statusSeverityDescription: string;
   reason?: string;
+  // When TfL first logged this status.
+  created?: string;
+  // TfL's own windows for how long the status applies; the last one's toDate (if any) is
+  // the closest thing TfL gives to "expected to end at".
+  validityPeriods?: Array<{ fromDate: string; toDate: string; isNow?: boolean }>;
 }
 
 export interface TflLine {
@@ -117,6 +122,11 @@ export interface TflDisruption {
   category: string;
   type: string;
   description: string;
+  // When TfL first logged this incident.
+  created?: string;
+  // TfL's own windows for how long the disruption applies; the last one's toDate (if any)
+  // is the closest thing TfL gives to "expected to end at".
+  validityPeriods?: Array<{ fromDate: string; toDate: string; isNow?: boolean }>;
 }
 
 // ---- projected shapes we hand to the model -------------------------------------------
@@ -166,7 +176,17 @@ export interface LineStatusProjection {
     statusSeverity: number;
     statusSeverityDescription: string;
     reason: string | null;
+    // ISO timestamp of when TfL first reported this, or null if TfL didn't say.
+    reportedAt: string | null;
+    // ISO timestamp of when TfL expects this to end, or null if unknown.
+    expectedEnd: string | null;
   }>;
+}
+
+// /Line/{id}/Route/Sequence/all, trimmed to the fields demo mode reads.
+export interface TflRouteSequence {
+  stopPointSequences?: Array<{ stopPoint: Array<{ id: string; name: string }> }>;
+  orderedLineRoutes?: Array<{ name: string; naptanIds: string[] }>;
 }
 
 export interface LineStatusResult {
@@ -178,6 +198,10 @@ export interface DisruptionProjection {
   category: string;
   type: string;
   description: string;
+  // ISO timestamp of when TfL first reported this, or null if TfL didn't say.
+  reportedAt: string | null;
+  // ISO timestamp of when TfL expects this to end, or null if unknown.
+  expectedEnd: string | null;
 }
 
 export interface LineDisruptionResult {

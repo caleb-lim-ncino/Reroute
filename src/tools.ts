@@ -1,5 +1,6 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { overrideDisruptionDetail, overrideLineStatus } from "./demo.ts";
 import { getJourneyOptions, getLineDisruptionDetail, getLineStatus, resolveStation, TflApiError } from "./tfl.ts";
 
 export const TFL_SERVER_NAME = "tfl";
@@ -48,16 +49,19 @@ export function createTflServer(appKey: string) {
       ),
       tool(
         "get_line_status",
-        "Get live status for one or more lines. statusSeverity 10 is Good Service; lower is worse. A line can carry several statuses at once, each covering a different section.",
+        "Get live status for one or more lines. statusSeverity 10 is Good Service; lower is worse. A line can carry several statuses at once, each covering a different section. Each status includes reportedAt (when TfL first logged it) and expectedEnd (when TfL expects it to clear); either can be null if TfL hasn't given a time — tell the commuter 'unknown' rather than guessing.",
         { lineIds: z.array(z.string()).min(1).describe("Line ids from journey legs, e.g. ['central', 'jubilee']") },
-        (args) => run("get_line_status", () => getLineStatus(args.lineIds, appKey)),
+        (args) => run("get_line_status", async () => overrideLineStatus(await getLineStatus(args.lineIds, appKey))),
         readOnly,
       ),
       tool(
         "get_line_disruption_detail",
-        "Get the cause of a line's disruption: planned engineering works, signal failure, suspension, etc. Call it when the cause changes how a commuter should react.",
+        "Get the cause of a line's disruption: planned engineering works, signal failure, suspension, etc. Call it when the cause changes how a commuter should react. Each entry includes reportedAt (when TfL first logged it) and expectedEnd (when TfL expects it to clear); either can be null if TfL hasn't given a time — tell the commuter 'unknown' rather than guessing.",
         { lineId: z.string().describe("A single line id, e.g. 'northern'") },
-        (args) => run("get_line_disruption_detail", () => getLineDisruptionDetail(args.lineId, appKey)),
+        (args) =>
+          run("get_line_disruption_detail", async () =>
+            overrideDisruptionDetail(args.lineId, await getLineDisruptionDetail(args.lineId, appKey)),
+          ),
         readOnly,
       ),
     ],

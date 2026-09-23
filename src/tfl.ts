@@ -16,6 +16,7 @@ import type {
   TflJourneyResultsResponse,
   TflLine,
   TflLiveCrowding,
+  TflRouteSequence,
   TflStopPoint,
   TflStopPointMatch,
   TflStopPointSearchResponse,
@@ -293,10 +294,28 @@ export async function getLineStatus(lineIds: string[], appKey = ""): Promise<Lin
       statusSeverity: status.statusSeverity,
       statusSeverityDescription: status.statusSeverityDescription,
       reason: status.reason ?? null,
+      reportedAt: status.created ?? null,
+      expectedEnd: status.validityPeriods?.at(-1)?.toDate ?? null,
     })),
   }));
 
   return { lines, fetchedAt };
+}
+
+// Every branch of a line as an ordered list of stop ids, plus each stop's name. Journey legs
+// use the same ids in their path, so a slice of one of these routes is a line segment.
+export async function getLineRoutes(
+  lineId: string,
+  appKey = "",
+): Promise<{ routes: string[][]; names: Map<string, string> }> {
+  const { value } = await fetchTfl<TflRouteSequence>(
+    `/Line/${encodeURIComponent(lineId)}/Route/Sequence/all`,
+    {},
+    appKey,
+  );
+  const names = new Map<string, string>();
+  for (const seq of value.stopPointSequences ?? []) for (const s of seq.stopPoint) names.set(s.id, s.name);
+  return { routes: (value.orderedLineRoutes ?? []).map((r) => r.naptanIds), names };
 }
 
 // ---- 4. get_line_disruption_detail -----------------------------------------------------
@@ -313,7 +332,15 @@ export async function getLineDisruptionDetail(lineId: string, appKey = ""): Prom
   const byDescription = new Map<string, DisruptionProjection>();
   for (const d of data) {
     if (!byDescription.has(d.description)) {
-      byDescription.set(d.description, { category: d.category, type: d.type, description: d.description });
+      byDescription.set(d.description, {
+        category: d.category,
+        type: d.type,
+        description: d.description,
+        reportedAt: d.created ?? null,
+        // TfL only tells us the end when the period isn't open-ended, so take the last
+        // period's toDate; anything else (missing, or still isNow with no end) is unknown.
+        expectedEnd: d.validityPeriods?.at(-1)?.toDate ?? null,
+      });
     }
   }
 

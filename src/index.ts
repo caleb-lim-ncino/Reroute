@@ -2,13 +2,31 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { prewarm, runVerdict, type StationInput, type VerdictRun } from "./agent.ts";
 import { loadConfig } from "./config.ts";
+import {
+  activeDemo,
+  clearDemo,
+  overrideJourneyDisruption,
+  overrideLineStatus,
+  randomDemo,
+  setDemo,
+  setStationClosure,
+} from "./demo.ts";
 import { LINE_STYLES } from "./lines.ts";
 import { cancel, finish, progressOf, STAGES } from "./progress.ts";
-import { startStationIndex, stationById, stations } from "./stations.ts";
+import { cleanName, startStationIndex, stationById, stations } from "./stations.ts";
 import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding, getRouteComparison } from "./tfl.ts";
 import type { TflJourney } from "./tfl-types.ts";
 import { usageSummary } from "./usage.ts";
-import { crowdingChip, departureBoard, page, usageFooter, verdictCard, type CardExtras } from "./views.ts";
+import {
+  crowdingChip,
+  demoBadge,
+  demoPanel,
+  departureBoard,
+  page,
+  usageFooter,
+  verdictCard,
+  type CardExtras,
+} from "./views.ts";
 
 const config = loadConfig();
 startStationIndex(config.tflAppKey);
@@ -18,7 +36,30 @@ const app = new Hono();
 
 app.use("/static/*", serveStatic({ root: "./" }));
 
-app.get("/", (c) => c.html(page()));
+app.get("/", (c) => c.html(page(activeDemo())));
+
+// Dev-only panel (tucked in the profile popup) for driving a live demo when there's no real
+// TfL disruption to show. hx-swap-oob on the badge markup keeps the header in sync with
+// whichever preset the panel just switched to.
+app.post("/demo/random", (c) => c.html(demoPanel(randomDemo()) + demoBadge(activeDemo())));
+app.post("/demo/clear", (c) => {
+  clearDemo();
+  return c.html(demoPanel(null) + demoBadge(null));
+});
+app.post("/demo/closure", async (c) => {
+  const body = await c.req.parseBody();
+  const fromId = field(body.fromId);
+  const toId = field(body.toId);
+  const from = stationById(fromId);
+  const to = stationById(toId);
+  const preset =
+    from && to ? setStationClosure(field(body.lineId), fromId, cleanName(from.name), toId, cleanName(to.name)) ?? null : null;
+  return c.html(demoPanel(preset) + demoBadge(activeDemo()));
+});
+app.post("/demo/:id", (c) => {
+  const preset = setDemo(c.req.param("id")) ?? null;
+  return c.html(demoPanel(preset) + demoBadge(activeDemo()));
+});
 
 const field = (v: unknown, max = 100) => String(v ?? "").trim().slice(0, max);
 
@@ -43,13 +84,18 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
     const pick = run.verdict.recommended_live_option;
     if (pick !== null && plan.live[pick]) {
       // TfL's own durations, so "minutes lost" is measured rather than the model's guess.
-      return { journey: plan.live[pick]!, label: "Take this route instead", live: true, usualMinutes: plan.usual?.duration };
+      return {
+        journey: overrideJourneyDisruption(plan.live[pick]!),
+        label: "Take this route instead",
+        live: true,
+        usualMinutes: plan.usual?.duration,
+      };
     }
     if (plan.usual) {
       const today = plan.live.find((j) => signature(j) === signature(plan.usual!));
-      return { journey: today ?? plan.usual, label: "Your route", live: !!today };
+      return { journey: overrideJourneyDisruption(today ?? plan.usual), label: "Your route", live: !!today };
     }
-    return { journey: plan.live[0]!, label: "Your route", live: true };
+    return { journey: overrideJourneyDisruption(plan.live[0]!), label: "Your route", live: true };
   } catch (err) {
     console.error(`[route] couldn't load itinerary: ${err}`);
     return undefined;
@@ -63,7 +109,9 @@ async function compareFor(run: VerdictRun, route: CardExtras["route"]): Promise<
     // A mode-restricted alternative that's identical to the route already shown (e.g.
     // "Your route" is already tube-only) is redundant, not a genuine alternative — drop it.
     const routeSig = route ? signature(route.journey) : undefined;
-    return options.filter((o) => signature(o.journey) !== routeSig);
+    return options
+      .filter((o) => signature(o.journey) !== routeSig)
+      .map((o) => ({ ...o, journey: overrideJourneyDisruption(o.journey) }));
   } catch (err) {
     console.error(`[compare] couldn't load alternatives: ${err}`);
     return undefined;
@@ -130,7 +178,10 @@ app.get("/board/:stopId", async (c) => {
       getArrivals(stopId, lineId, config.tflAppKey),
       lineId ? getLineStatus([lineId], config.tflAppKey).catch(() => undefined) : undefined,
     ]);
-    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: arrivals.value, status: status?.lines[0] }));
+    // Keeps the ticker consistent with the verdict text above it: without this, a demo
+    // disruption would say "Severe Delays" while the live board still reads "Good Service".
+    const overridden = status ? overrideLineStatus(status) : status;
+    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: arrivals.value, status: overridden?.lines[0] }));
   } catch (err) {
     console.error(`[board] ${stopId}: ${err}`);
     return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: [], fetchFailed: true }));

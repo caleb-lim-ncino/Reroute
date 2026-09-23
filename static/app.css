@@ -314,6 +314,127 @@ body > header.topbar::before {
 }
 .link-icon svg { width: 1rem; height: 1rem; }
 
+/* ---- demo mode (dev-only, tucked in the profile popup) ---- */
+.demo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .3rem .65rem;
+  border-radius: 1rem;
+  font-size: .78rem;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+}
+.demo-badge svg { width: .9rem; height: .9rem; flex: none; }
+.demo-badge[hidden] { display: none; }
+.profile-divider { border: none; border-top: 1px solid var(--hairline); margin: .9rem -1.2rem .7rem; }
+@media (min-width: 720px) { .profile-divider { margin-inline: -1.1rem; } }
+
+.demo-panel {
+  text-align: left;
+  padding: .7rem .7rem .8rem;
+  border-radius: .7rem;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+}
+.demo-head {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: .55rem;
+}
+.demo-head-icon { display: flex; width: 1rem; height: 1rem; }
+.demo-head-icon svg { width: 100%; height: 100%; }
+.demo-status {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .85rem;
+  color: var(--fg-muted);
+  margin: 0 0 .65rem;
+}
+.demo-status-dot {
+  width: .5rem;
+  height: .5rem;
+  flex: none;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.demo-status.is-active { color: var(--fg); }
+.demo-status.is-active .demo-status-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 22%, transparent); }
+.demo-actions { display: flex; gap: .5rem; margin-bottom: .8rem; }
+.demo-random, .demo-clear {
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .4rem .7rem;
+  border-radius: .5rem;
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  color: var(--fg);
+  cursor: pointer;
+}
+.demo-random:hover, .demo-clear:hover:not(:disabled) { background: var(--hover); }
+.demo-clear:disabled { opacity: .5; cursor: not-allowed; }
+
+.demo-subhead {
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: .8rem 0 .4rem;
+}
+.demo-presets { display: flex; flex-wrap: wrap; gap: .4rem; }
+.demo-preset {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .78rem;
+  padding: .3rem .55rem .3rem .45rem;
+  border-radius: .45rem;
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  color: var(--fg);
+  cursor: pointer;
+}
+.demo-preset:hover { background: var(--hover); }
+.demo-preset[aria-current="true"] { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, var(--card)); }
+.demo-preset small { color: var(--fg-muted); font-weight: 400; }
+.demo-dot { width: .55rem; height: .55rem; flex: none; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--edge); }
+
+.demo-closure-form { display: flex; flex-direction: column; gap: .45rem; }
+.demo-closure-stations { display: flex; align-items: center; gap: .4rem; }
+.demo-closure-arrow { color: var(--fg-muted); flex: none; }
+.demo-line-select, .demo-station-select {
+  font-size: .8rem;
+  padding: .35rem .5rem;
+  border-radius: .5rem;
+  border: 1px solid var(--hairline);
+  background: var(--card);
+  color: var(--fg);
+}
+.demo-line-select { width: 100%; }
+.demo-station-select { flex: 1; min-width: 0; }
+.demo-station-select:disabled { opacity: .5; }
+.demo-closure-submit {
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .45rem .7rem;
+  border-radius: .5rem;
+  border: 1px solid transparent;
+  background: var(--blue-fill);
+  color: #fff;
+  cursor: pointer;
+}
+.demo-closure-submit:hover { background: var(--blue-fill-hover); }
+
 /* ---- line pills (TfL lozenges) ---- */
 .pill {
   display: inline-block;
@@ -510,18 +631,20 @@ button.link {
 button.link .icon { width: .85rem; height: .85rem; }
 button.link:hover { color: var(--blue); }
 .picked .save {
+  --accent: var(--blue);
   display: inline-flex;
   align-items: center;
   margin: 0;
   padding: .2rem .6rem;
   font-size: .75rem;
   width: auto;
-  border: 1px solid var(--blue);
+  border: 1px solid var(--accent);
   background: transparent;
-  color: var(--blue);
+  color: var(--accent);
   box-shadow: none;
 }
-.picked .save:hover { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
+.picked .save.work { --accent: var(--red); }
+.picked .save:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); border-color: var(--accent); }
 
 /* ---- planner form: a card with stacked From/To and a swap button riding alongside ---- */
 #plan {
@@ -704,6 +827,9 @@ button.link:hover { color: var(--blue); }
 .stops .dot { width: 1.1rem; height: 1.1rem; border-radius: 50%; background: var(--dot-bg); border: .22rem solid var(--dot-ink); transition: background .3s, transform .3s; }
 /* Five stop names don't fit a phone's width; "Next stop" in the head already names it. */
 .stops .label { display: none; margin-top: .35rem; font-size: .68rem; white-space: nowrap; color: var(--fg-muted); }
+/* Centered labels on the end stops would overflow past the card edge, so anchor them inward. */
+.stops li:first-child { align-items: flex-start; }
+.stops li:last-child { align-items: flex-end; }
 .stops li.done .dot { background: var(--blue); border-color: var(--blue); }
 .stops li.current .dot { transform: scale(1.25); border-color: var(--tfl-red); }
 .stops li.current .label { color: var(--fg-strong); font-weight: 700; }
@@ -755,7 +881,10 @@ button.link:hover { color: var(--blue); }
 .hero-route { font-weight: 700; color: var(--fg-strong); font-size: .95rem; }
 .status-pill { display: inline-block; font-size: .78rem; font-weight: 800; padding: .15rem .6rem; border-radius: .3rem; color: #fff; background: var(--st); letter-spacing: .01em; }
 [data-status="minor"] .status-pill { color: #1a1a1a; }
+.hero-stats { display: flex; align-items: center; gap: .6rem; margin-left: auto; }
+.hero-cost { font-size: .78rem; font-weight: 700; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .verdict-text { font-size: 1.12rem; line-height: 1.4; font-weight: 600; margin: .65rem 0 .8rem; color: var(--fg-strong); }
+.verdict-error { margin: -.3rem 0 .8rem; font-size: .82rem; font-weight: 600; color: var(--red); }
 
 .facts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .8rem; }
 .facts > div { flex: 1 1 4.1rem; min-width: 0; padding: .45rem .5rem; border-radius: .6rem; background: var(--card); border: 1px solid var(--hairline); }
