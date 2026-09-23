@@ -305,9 +305,20 @@ Found during the build (steps 1–6):
   disambiguation. `resolveStation` expands hubs to their tube child via `/StopPoint/{hub}`.
 - **Cache hits must keep the original `fetchedAt`.** Otherwise the staleness check behind
   `confidence: "low"` can never fire.
-- **Latency is model-bound**, not spawn-bound: ~17s total, ~13s of it in the API across
-  6–7 sequential turns. Pre-warming with `startup()` would save only ~3s, and its handle is
-  single-use, so it isn't wired in.
+- **Latency was ~17s; now ~7–10s.** A timing trace showed ~4s subprocess spawn, ~2s of
+  extended thinking per turn, and ~4s of prose the model wrote before the structured
+  answer (thrown away). Fixes: a one-slot warm pool (`startup()` is single-use, so each
+  request takes the warm query and immediately starts the next), `thinking: disabled`, a
+  "no text, only tool calls" rule, and passing autocomplete StopPoint ids so the resolve
+  turns are skipped. Free-text stations still cost two extra turns.
+- **Bus legs start at stop groups** (`490G…`, e.g. West Croydon Bus Station), and
+  `/StopPoint/{group}/Arrivals` returns `[]`. The buses belong to the lettered stands two
+  levels down (B1, B3…), so the board expands the group to leaves serving the route. Bus
+  arrivals carry `towards: "null"` (a string), and the planner's direction ("Crystal
+  Palace Parade") only prefix-matches the feed's destination ("Crystal Palace").
+- **`minutes_lost` from the model is unreliable** ("Disrupted, 0 min lost"). The card
+  computes it from TfL durations (detour minus normal-day), and a disruption the detour
+  absorbs (under 3 min) shows as an amber "Easy detour" instead.
 - **The Journey Planner is disruption-aware.** Asked "now", it silently routes around a
   suspended line, so its fastest option is a detour, not the usual route. With the Windrush
   line suspended, Canada Water → Crystal Palace came back as a 64-min Jubilee/Northern/

@@ -1,9 +1,9 @@
 import type { VerdictRun } from "./agent.ts";
 import { lineStyle } from "./lines.ts";
 import { STAGES } from "./progress.ts";
-import { cleanName } from "./stations.ts";
+import { cleanName, stationById } from "./stations.ts";
 import type { TflArrival, TflJourney, TflJourneyLeg, TflLiveCrowding } from "./tfl-types.ts";
-import type { LineStatusProjection } from "./tfl-types.ts";
+import type { LineStatusProjection, RouteComparisonOption } from "./tfl-types.ts";
 import type { usageSummary } from "./usage.ts";
 
 function esc(s: string): string {
@@ -38,6 +38,7 @@ function combo(field: "from" | "to", placeholder: string): string {
       <label for="${field}">${field === "from" ? "From" : "To"}</label>
       <input id="${field}" name="${field}" placeholder="${placeholder}" required autocomplete="off" spellcheck="false"
         role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="${field}-list">
+      <button type="button" class="clear" aria-label="Clear ${field === "from" ? "From" : "To"}" hidden></button>
       <input type="hidden" name="${field}Id">
       <ul id="${field}-list" class="suggestions" role="listbox" hidden></ul>
       <div class="picked" aria-live="polite"></div>
@@ -63,7 +64,7 @@ export function page(): string {
     <div class="brand">${ROUNDEL}<div><h1>Reroute</h1><p>Does your usual Tube route still hold up right now?</p></div></div>
   </header>
   <main>
-    <nav id="saved" aria-label="Saved stations"></nav>
+    <section id="saved" aria-label="My stations"></section>
     <form id="plan" hx-post="/plan" hx-target="#result" hx-indicator="#checking" hx-disabled-elt="find button[type=submit]">
       <div class="route-inputs">
         ${combo("from", "e.g. Canada Water")}
@@ -101,29 +102,75 @@ function loader(): string {
 // ---- verdict card -------------------------------------------------------------------
 
 export interface CardExtras {
-  route?: { journey: TflJourney; label: string; live: boolean };
+  // usualMinutes is set when the route shown is a detour, so the card can compare durations.
+  route?: { journey: TflJourney; label: string; live: boolean; usualMinutes?: number };
+  // Bus-only / tube-only alternatives, so a commuter can weigh cost and time against the plan.
+  compare?: RouteComparisonOption[];
 }
+
+const formatFare = (pence: number | null | undefined) => (pence == null ? null : `£${(pence / 100).toFixed(2)}`);
 
 export function verdictCard(from: string, to: string, run: VerdictRun, extras: CardExtras = {}): string {
   const v = run.verdict;
-  const status = run.failure || v.confidence === "low" ? "unknown" : v.is_disrupted ? "disrupted" : "clear";
-  const headline = { clear: "Good service", disrupted: "Disrupted", unknown: "Couldn't verify" }[status];
+  const route = extras.route;
+  const detour = route?.usualMinutes !== undefined ? route.journey.duration : undefined;
+  const lost = detour !== undefined ? Math.max(0, detour - route!.usualMinutes!) : Math.round(v.minutes_lost);
+  const compared = detour !== undefined ? ` (${detour} min vs ${route!.usualMinutes} normally)` : "";
+
+  // "Disrupted, 0 min lost" reads as a contradiction. A disruption the detour absorbs is
+  // real but minor, so it gets its own amber state and says the detour costs nothing.
+  const status =
+    run.failure || v.confidence === "low" ? "unknown" : !v.is_disrupted ? "clear" : lost < 3 ? "minor" : "disrupted";
+  const headline = {
+    clear: "Good service",
+    minor: detour !== undefined ? "Easy detour" : "Minor disruption",
+    disrupted: "Disrupted",
+    unknown: "Couldn't verify",
+  }[status];
 
   const details = [
-    v.is_disrupted ? `<li>About <strong>${v.minutes_lost} min</strong> lost vs a normal day</li>` : "",
+    status === "disrupted"
+      ? `<li>About <strong>${lost} min</strong> lost vs a normal day${esc(compared)}</li>`
+      : "",
+    status === "minor"
+      ? detour !== undefined
+        ? `<li>The detour takes about as long as a normal day${esc(compared)}</li>`
+        : `<li>Little or no time lost vs a normal day</li>`
+      : "",
     v.alternative_summary ? `<li>Alternative: ${esc(v.alternative_summary)}</li>` : "",
     `<li>Confidence: ${esc(v.confidence)}</li>`,
   ].join("");
 
-  const route = extras.route;
   return `<article class="verdict" data-status="${status}">
   <header><span class="status-pill">${headline}</span> <strong>${esc(from)} → ${esc(to)}</strong></header>
   <p class="verdict-text">${esc(v.verdict)}</p>
   <ul>${details}</ul>
-  ${route ? itinerary(route.journey, route.label, route.live) : ""}
+  ${route ? itinerary(route.journey, route.label, route.live, status !== "clear") : ""}
   ${route ? boardSlot(route.journey) : ""}
+  ${extras.compare?.length ? compareTable(route, extras.compare) : ""}
   <footer><small>${(run.durationMs / 1000).toFixed(1)}s · $${run.costUsd.toFixed(4)}</small></footer>
 </article>`;
+}
+
+// How this route stacks up against a bus-only or tube-only plan, so a commuter can weigh
+// a few extra minutes against a cheaper or simpler journey.
+function compareTable(route: CardExtras["route"], options: RouteComparisonOption[]): string {
+  const rows = [
+    route ? { label: route.label, duration: route.journey.duration, fareTotalCost: route.journey.fare?.totalCost ?? null } : null,
+    ...options,
+  ].filter((r): r is { label: string; duration: number; fareTotalCost: number | null } => r !== null);
+  return `<section class="compare">
+    <h3>Compare your options</h3>
+    <table>
+      <thead><tr><th>Option</th><th>Time</th><th>Cost</th></tr></thead>
+      <tbody>${rows
+        .map(
+          (r) =>
+            `<tr><td>${esc(r.label)}</td><td>${r.duration} min</td><td>${esc(formatFare(r.fareTotalCost) ?? "—")}</td></tr>`,
+        )
+        .join("")}</tbody>
+    </table>
+  </section>`;
 }
 
 const londonTime = (iso?: string) => (iso ? iso.slice(11, 16) : "");
@@ -141,7 +188,36 @@ function crowdSlot(naptanId?: string): string {
   return `<span class="crowd-slot" hx-get="/crowding/${encodeURIComponent(naptanId!)}" hx-trigger="load" hx-swap="innerHTML"></span>`;
 }
 
-function itinerary(journey: TflJourney, label: string, live: boolean): string {
+// The stations between departurePoint and arrivalPoint, collapsed by default so a
+// 20-stop Piccadilly line leg doesn't dominate the card. Rendered as a little tube map:
+// a coloured line (the leg's own line) threaded through a dot per stop, with a tiny dot
+// per other line an interchange stop also serves.
+function stopList(leg: TflJourneyLeg): string {
+  const stops = leg.path?.stopPoints ?? [];
+  if (leg.mode.id === "walking" || stops.length === 0) return "";
+  const legLineId = leg.routeOptions?.[0]?.lineIdentifier?.id;
+  const style = lineStyle(legLineId, leg.mode.id);
+  const items = stops
+    .map((s) => {
+      const otherLines = (stationById(s.id)?.lines ?? []).filter((l) => l !== legLineId);
+      const dots = otherLines
+        .map((l) => {
+          const ls = lineStyle(l);
+          return `<span class="tube-line-dot" style="--c:${ls.colour}" title="${esc(ls.name)}"></span>`;
+        })
+        .join("");
+      return `<li><span class="tube-name">${esc(cleanName(s.name))}</span>${dots ? `<span class="tube-lines">${dots}</span>` : ""}</li>`;
+    })
+    .join("");
+  return `<details class="stop-list">
+    <summary>${stops.length} stop${stops.length === 1 ? "" : "s"} along the way</summary>
+    <ol class="tube-stops" style="--c:${style.colour}">${items}</ol>
+  </details>`;
+}
+
+// TfL flags legs isDisrupted for minor notices too; showing that under a "Good service"
+// verdict contradicts the card, so leg warnings only appear when the verdict agrees.
+function itinerary(journey: TflJourney, label: string, live: boolean, warnLegs: boolean): string {
   const steps = journey.legs
     .map((leg) => {
       const lineId = leg.routeOptions?.[0]?.lineIdentifier?.id;
@@ -155,15 +231,17 @@ function itinerary(journey: TflJourney, label: string, live: boolean): string {
       const instruction = leg.instruction?.detailed ?? leg.instruction?.summary ?? "";
       return `<li style="--c:${style.colour}">
         <div class="step-head">${legPill(leg)} <span class="step-from">${esc(cleanName(leg.departurePoint.commonName))}</span> ${crowdSlot(leg.departurePoint.naptanId)}</div>
-        <div class="step-body">${esc(instruction)}${leg.isDisrupted ? ` <span class="warn">Disrupted</span>` : ""}</div>
+        <div class="step-body">${esc(instruction)}${warnLegs && leg.isDisrupted ? ` <span class="warn">Disrupted</span>` : ""}</div>
         <div class="step-facts">${facts.map(esc).join(" · ")}</div>
+        ${stopList(leg)}
       </li>`;
     })
     .join("");
   const last = journey.legs.at(-1)?.arrivalPoint;
   const arrive = live && journey.arrivalDateTime ? ` · arrive ${londonTime(journey.arrivalDateTime)}` : "";
+  const fare = formatFare(journey.fare?.totalCost);
   return `<section class="itinerary">
-    <h3>${esc(label)} <small>${journey.duration} min${arrive}</small></h3>
+    <h3>${esc(label)} <small>${journey.duration} min${arrive}${fare ? ` · ${esc(fare)} pay as you go` : ""}</small></h3>
     <ol class="steps">${steps}
       <li class="end"><div class="step-head"><span class="step-from">${esc(cleanName(last?.commonName ?? ""))}</span> ${crowdSlot(last?.naptanId)}</div></li>
     </ol>
@@ -177,6 +255,7 @@ function boardSlot(journey: TflJourney): string {
   if (!leg || !stopId) return "";
   const params = new URLSearchParams({
     line: leg.routeOptions?.[0]?.lineIdentifier?.id ?? "",
+    mode: leg.mode.id,
     towards: cleanName(leg.routeOptions?.[0]?.directions?.[0] ?? ""),
     name: cleanName(leg.departurePoint.commonName),
   });
@@ -193,18 +272,31 @@ function boardSlot(journey: TflJourney): string {
 export interface BoardInput {
   stationName: string;
   lineId: string;
+  mode?: string;
   towards: string;
   arrivals: TflArrival[];
   status?: LineStatusProjection;
 }
 
+// TfL sends bus arrivals with towards: "null" (the string), and tube ones with a
+// "Check Front of Train" placeholder; neither is a destination.
 function destinationOf(a: TflArrival): string {
-  const towards = a.towards && !/check front of train/i.test(a.towards) ? a.towards : "";
+  const towards = a.towards && a.towards !== "null" && !/check front of train/i.test(a.towards) ? a.towards : "";
   return towards || cleanName(a.destinationName ?? "") || "Check front of train";
 }
 
+// Loose direction match: the Journey Planner says "Crystal Palace Parade" where the
+// arrivals feed says "Crystal Palace", so either may be a prefix of the other.
+function sameDirection(a: string, b: string): boolean {
+  const x = a.toLowerCase().trim();
+  const y = b.toLowerCase().trim();
+  return !!x && !!y && (x.startsWith(y) || y.startsWith(x));
+}
+
 export function departureBoard(b: BoardInput): string {
-  const style = lineStyle(b.lineId || null);
+  const bus = b.mode === "bus";
+  const style = lineStyle(b.lineId || null, b.mode);
+  const pillName = bus ? `Bus ${b.lineId}` : style.name;
   const byPlatform = new Map<string, TflArrival[]>();
   for (const a of [...b.arrivals].sort((x, y) => x.timeToStation - y.timeToStation)) {
     if (b.lineId && a.lineId !== b.lineId) continue;
@@ -214,14 +306,13 @@ export function departureBoard(b: BoardInput): string {
   }
 
   // The commuter's platform is the one whose trains run towards the leg's direction.
-  const towards = b.towards.toLowerCase();
   const isYours = (list: TflArrival[]) =>
-    !!towards && list.some((a) => cleanName(a.destinationName ?? "").toLowerCase() === towards || destinationOf(a).toLowerCase().startsWith(towards));
+    list.some((a) => sameDirection(cleanName(a.destinationName ?? ""), b.towards) || sameDirection(destinationOf(a), b.towards));
   const platforms = [...byPlatform.entries()]
     .sort(([, a], [, b2]) => Number(isYours(b2)) - Number(isYours(a)))
     .slice(0, 2);
 
-  const approaching = platforms.some(([, list]) => isYours(list) && (list[0]?.timeToStation ?? 999) < 30);
+  const approaching = !bus && platforms.some(([, list]) => isYours(list) && (list[0]?.timeToStation ?? 999) < 30);
   const rows = platforms
     .map(([name, list]) => {
       const trains = list
@@ -231,7 +322,9 @@ export function departureBoard(b: BoardInput): string {
           return `<div class="board-row"><span class="n">${i + 1}</span><span class="dest">${esc(destinationOf(a))}</span><span class="due">${mins < 1 ? "due" : `${mins} min`}</span></div>`;
         })
         .join("");
-      return `<div class="platform${isYours(list) ? " yours" : ""}"><div class="plat-name">${esc(name || "Departures")}${isYours(list) ? " · your platform" : ""}</div>${trains}</div>`;
+      const place = bus ? (name && name !== "null" ? `Stop ${name}` : "Departures") : name || "Departures";
+      const yours = isYours(list) ? (bus ? " · your stop" : " · your platform") : "";
+      return `<div class="platform${isYours(list) ? " yours" : ""}"><div class="plat-name">${esc(place)}${yours}</div>${trains}</div>`;
     })
     .join("");
 
@@ -240,10 +333,12 @@ export function departureBoard(b: BoardInput): string {
     ? "*** STAND BACK — TRAIN APPROACHING ***"
     : worst
       ? `${worst.statusSeverityDescription}: ${worst.reason ?? ""}`
-      : `Good service on the ${style.name || "line"}${b.lineId === "dlr" || !style.name ? "" : " line"}`;
+      : bus
+        ? `Good service on route ${b.lineId}`
+        : `Good service on the ${style.name || "line"}${b.lineId === "dlr" || !style.name ? "" : " line"}`;
 
   return `<div class="board" role="region" aria-label="Live departures at ${esc(b.stationName)}">
-    <div class="board-head"><span>${esc(b.stationName)}</span>${style.name ? `<span class="pill" style="--c:${style.colour};--ink:${style.ink}">${esc(style.name)}</span>` : ""}</div>
+    <div class="board-head"><span>${esc(b.stationName)}</span>${pillName ? `<span class="pill" style="--c:${style.colour};--ink:${style.ink}">${esc(pillName)}</span>` : ""}</div>
     ${rows || `<div class="board-row"><span class="dest">No departures shown</span></div>`}
     <div class="board-foot"><div class="ticker${worst || approaching ? " alert" : ""}"><span>${esc(ticker)}</span></div><span class="board-clock" data-clock></span></div>
   </div>`;

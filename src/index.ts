@@ -1,17 +1,18 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
-import { runVerdict, type StationInput, type VerdictRun } from "./agent.ts";
+import { prewarm, runVerdict, type StationInput, type VerdictRun } from "./agent.ts";
 import { loadConfig } from "./config.ts";
 import { LINE_STYLES } from "./lines.ts";
 import { finish, progressOf, STAGES } from "./progress.ts";
 import { startStationIndex, stationById, stations } from "./stations.ts";
-import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding } from "./tfl.ts";
+import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding, getRouteComparison } from "./tfl.ts";
 import type { TflJourney } from "./tfl-types.ts";
 import { usageSummary } from "./usage.ts";
 import { crowdingChip, departureBoard, page, usageFooter, verdictCard, type CardExtras } from "./views.ts";
 
 const config = loadConfig();
 startStationIndex(config.tflAppKey);
+prewarm(config);
 
 const app = new Hono();
 
@@ -41,7 +42,8 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
     const plan = await getJourneyPlan(run.journey.fromId, run.journey.toId, config.tflAppKey);
     const pick = run.verdict.recommended_live_option;
     if (pick !== null && plan.live[pick]) {
-      return { journey: plan.live[pick]!, label: "Take this route instead", live: true };
+      // TfL's own durations, so "minutes lost" is measured rather than the model's guess.
+      return { journey: plan.live[pick]!, label: "Take this route instead", live: true, usualMinutes: plan.usual?.duration };
     }
     if (plan.usual) {
       const today = plan.live.find((j) => signature(j) === signature(plan.usual!));
@@ -50,6 +52,17 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
     return { journey: plan.live[0]!, label: "Your route", live: true };
   } catch (err) {
     console.error(`[route] couldn't load itinerary: ${err}`);
+    return undefined;
+  }
+}
+
+async function compareFor(run: VerdictRun): Promise<CardExtras["compare"]> {
+  if (!run.journey || run.failure) return undefined;
+  try {
+    const { options } = await getRouteComparison(run.journey.fromId, run.journey.toId, config.tflAppKey);
+    return options;
+  } catch (err) {
+    console.error(`[compare] couldn't load alternatives: ${err}`);
     return undefined;
   }
 }
@@ -65,10 +78,10 @@ app.post("/plan", async (c) => {
     const run = await runVerdict(stationInput(from, field(form.fromId, 20)), stationInput(to, field(form.toId, 20)), config, {
       rid: rid || undefined,
     });
-    const route = await routeFor(run);
+    const [route, compare] = await Promise.all([routeFor(run), compareFor(run)]);
     // Lets the usage footer refresh as soon as a verdict lands instead of on the next poll.
     c.header("HX-Trigger", "verdict");
-    return c.html(verdictCard(from, to, run, { route }));
+    return c.html(verdictCard(from, to, run, { route, compare }));
   } finally {
     if (rid) finish(rid);
   }
@@ -100,17 +113,18 @@ app.get("/crowding/:id", async (c) => {
 app.get("/board/:stopId", async (c) => {
   const stopId = c.req.param("stopId");
   const lineId = field(c.req.query("line"), 40);
+  const mode = field(c.req.query("mode"), 20);
   const towards = field(c.req.query("towards"));
   const stationName = field(c.req.query("name")) || stationById(stopId)?.name || "Departures";
   try {
     const [arrivals, status] = await Promise.all([
-      getArrivals(stopId, config.tflAppKey),
+      getArrivals(stopId, lineId, config.tflAppKey),
       lineId ? getLineStatus([lineId], config.tflAppKey).catch(() => undefined) : undefined,
     ]);
-    return c.html(departureBoard({ stationName, lineId, towards, arrivals: arrivals.value, status: status?.lines[0] }));
+    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: arrivals.value, status: status?.lines[0] }));
   } catch (err) {
     console.error(`[board] ${stopId}: ${err}`);
-    return c.html(departureBoard({ stationName, lineId, towards, arrivals: [] }));
+    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: [] }));
   }
 });
 

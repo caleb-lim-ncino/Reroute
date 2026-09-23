@@ -1,4 +1,4 @@
-import { query, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, startup, type Options, type SDKResultMessage, type WarmQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { Config } from "./config.ts";
 import { Verdict, verdictJsonSchema } from "./schema.ts";
 import { advance } from "./progress.ts";
@@ -14,14 +14,14 @@ Steps:
 4. If any line is below Good Service, judge whether the commuter would actually notice. Minor Delays on a short leg barely matter; Severe Delays, a part closure, or a suspension on a leg they ride — especially the interchange line — does. Call get_line_disruption_detail when the cause changes the answer: planned engineering is predictable, a signal failure is not.
 5. Only when the disruption is noticeable, recommend the fastest live option that avoids the disrupted section: set recommended_live_option to its index, and estimate minutes_lost as its duration minus the usual duration. Never invent a route that isn't one of the live options. When the usual route holds, recommended_live_option is null.
 
-Make independent tool calls in parallel (e.g. both resolve_station calls at once).
+Make independent tool calls in parallel (e.g. both resolve_station calls at once). Write no text before, between or after tool calls: your only output is tool calls, ending with the structured verdict. Prose you write is thrown away and makes the commuter wait.
 
 Confidence:
 - "low" if any tool call errored, a response was missing, or any fetchedAt is more than 3 minutes before the current time you are given. Never trust stale or missing data silently.
 - "medium" if the data is fresh but the impact of a disruption on this particular trip is uncertain.
 - "high" otherwise.
 
-The verdict is one plain-English sentence a commuter would read on the platform: say what to do, not how you worked it out. minutes_lost is your estimate of extra minutes versus a normal day, 0 if none. alternative_summary is null unless you are recommending the alternative; when you are, name the actual lines or bus routes and where to change, e.g. "Victoria line to Vauxhall, then bus 344".`;
+The verdict is one plain-English sentence a commuter would read on the platform: say what to do, not how you worked it out. is_disrupted means the usual route is affected. minutes_lost is extra minutes versus a normal day: when you recommend a live option it is that option's duration minus the usual duration; when the commuter stays on a delayed usual route, it is your estimate of the delay. If the alternative is no slower, say so in the verdict: "your line is down, but this detour costs you nothing". alternative_summary is null unless you are recommending the alternative; when you are, name the actual lines or bus routes and where to change, e.g. "Victoria line to Vauxhall, then bus 344".`;
 
 export interface VerdictRun {
   verdict: Verdict;
@@ -98,6 +98,48 @@ function subprocessEnv(config: Config): Record<string, string> {
   return env;
 }
 
+function agentOptions(config: Config): Options {
+  return {
+    model: config.verdictModelId,
+    systemPrompt: SYSTEM_PROMPT,
+    mcpServers: { [TFL_SERVER_NAME]: createTflServer(config.tflAppKey) },
+    allowedTools: [`mcp__${TFL_SERVER_NAME}__*`],
+    // No built-in tools, no filesystem settings, no session files: this is a server, and
+    // the host's ~/.claude config must not leak into its behaviour.
+    tools: [],
+    settingSources: [],
+    persistSession: false,
+    permissionMode: "dontAsk",
+    maxTurns: 12,
+    // Reading clean TfL JSON doesn't need extended thinking; it cost ~2.5s per run.
+    thinking: { type: "disabled" },
+    outputFormat: { type: "json_schema", schema: verdictJsonSchema },
+    env: subprocessEnv(config),
+  };
+}
+
+// One pre-spawned Claude Code subprocess, kept ready for the next request. A WarmQuery is
+// single-use, so taking it immediately starts its replacement. Concurrent requests that
+// find the slot empty just take the cold path.
+let warmSlot: Promise<WarmQuery | undefined> | undefined;
+let warmEnabled = false;
+
+// Opt-in (the server calls it at boot) so one-shot CLI runs don't leave a spare subprocess.
+export function prewarm(config: Config): void {
+  warmEnabled = true;
+  warmSlot = startup({ options: agentOptions(config) }).catch((err) => {
+    console.error(`[agent] prewarm failed: ${err}`);
+    return undefined;
+  });
+}
+
+async function takeWarm(config: Config): Promise<WarmQuery | undefined> {
+  if (!warmEnabled) return undefined;
+  const slot = warmSlot;
+  prewarm(config);
+  return slot ? await slot : undefined;
+}
+
 export async function runVerdict(
   fromInput: StationInput,
   toInput: StationInput,
@@ -113,40 +155,45 @@ export async function runVerdict(
   let journey: VerdictRun["journey"];
   if (opts.rid) advance(opts.rid, fromInput.id && toInput.id ? 1 : 0);
 
-  try {
-    for await (const message of query({
-      prompt: `Current time: ${new Date().toISOString()}\nFrom: ${describe(fromInput)}\nTo: ${describe(toInput)}`,
-      options: {
-        model: config.verdictModelId,
-        systemPrompt: SYSTEM_PROMPT,
-        mcpServers: { [TFL_SERVER_NAME]: createTflServer(config.tflAppKey) },
-        allowedTools: [`mcp__${TFL_SERVER_NAME}__*`],
-        // No built-in tools, no filesystem settings, no session files: this is a server, and
-        // the host's ~/.claude config must not leak into its behaviour.
-        tools: [],
-        settingSources: [],
-        persistSession: false,
-        permissionMode: "dontAsk",
-        maxTurns: 12,
-        outputFormat: { type: "json_schema", schema: verdictJsonSchema },
-        env: subprocessEnv(config),
-      },
-    })) {
-      if (message.type === "result") result = message;
-      if (message.type !== "assistant") continue;
-      for (const block of message.message.content) {
-        if (block.type !== "tool_use") continue;
-        const stage = TOOL_STAGE[block.name];
-        if (opts.rid && stage !== undefined) advance(opts.rid, stage);
-        if (block.name.endsWith("__get_journey_options")) {
-          const input = block.input as { fromId?: string; toId?: string };
-          if (input.fromId && input.toId) journey = { fromId: input.fromId, toId: input.toId };
-        }
+  // Drives the progress gauge and records which stops the agent planned between.
+  const track = (content: Array<{ type: string; name?: string; input?: unknown }>) => {
+    for (const block of content) {
+      if (block.type !== "tool_use" || !block.name) continue;
+      const stage = TOOL_STAGE[block.name];
+      if (opts.rid && stage !== undefined) advance(opts.rid, stage);
+      if (block.name.endsWith("__get_journey_options")) {
+        const input = block.input as { fromId?: string; toId?: string };
+        if (input.fromId && input.toId) journey = { fromId: input.fromId, toId: input.toId };
       }
+    }
+  };
+
+  const prompt = `Current time: ${new Date().toISOString()}\nFrom: ${describe(fromInput)}\nTo: ${describe(toInput)}`;
+  const warm = await takeWarm(config);
+
+  try {
+    // Warm path skips the ~4s Claude Code subprocess spawn; cold path is the fallback.
+    for await (const message of warm ? warm.query(prompt) : query({ prompt, options: agentOptions(config) })) {
+      if (message.type === "result") result = message;
+      if (message.type === "assistant") track(message.message.content);
     }
   } catch (err) {
     // A single-shot query() throws after yielding an error result; keep the result if we got one.
     thrown = err;
+  }
+
+  // A warm subprocess can die while idle. If it produced nothing, retry once cold.
+  if (warm && !result) {
+    console.error(`[agent] warm query failed (${thrown}); retrying cold`);
+    thrown = undefined;
+    try {
+      for await (const message of query({ prompt, options: agentOptions(config) })) {
+        if (message.type === "result") result = message;
+        if (message.type === "assistant") track(message.message.content);
+      }
+    } catch (err) {
+      thrown = err;
+    }
   }
 
   let costUsd = 0;

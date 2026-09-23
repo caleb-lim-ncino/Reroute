@@ -19,6 +19,7 @@ export interface TflStopPoint {
   commonName: string;
   modes: string[];
   children: TflStopPoint[];
+  lines?: Array<{ id: string }>;
 }
 
 export interface TflPlace {
@@ -37,6 +38,11 @@ export interface TflRouteOption {
   directions?: string[];
 }
 
+export interface TflPathStopPoint {
+  id: string;
+  name: string;
+}
+
 export interface TflJourneyLeg {
   duration: number;
   mode: { id: string; name: string };
@@ -47,7 +53,12 @@ export interface TflJourneyLeg {
   departureTime?: string;
   arrivalTime?: string;
   instruction?: { summary: string; detailed: string };
-  path?: { stopPoints?: unknown[] };
+  // The intermediate stations between departurePoint and arrivalPoint (exclusive of both).
+  path?: { stopPoints?: TflPathStopPoint[] };
+}
+
+export interface TflJourneyFare {
+  totalCost: number;
 }
 
 export interface TflJourney {
@@ -55,6 +66,7 @@ export interface TflJourney {
   startDateTime?: string;
   arrivalDateTime?: string;
   legs: TflJourneyLeg[];
+  fare?: TflJourneyFare;
 }
 
 export interface TflJourneyResultsResponse {
@@ -167,5 +179,20 @@ export interface DisruptionProjection {
 
 export interface LineDisruptionResult {
   disruptions: DisruptionProjection[];
+  fetchedAt: string;
+}
+
+// ---- page-only: mode-restricted alternatives, for weighing cost/time against the plan --
+
+export interface RouteComparisonOption {
+  key: string;
+  label: string;
+  duration: number;
+  // Pay-as-you-go pence, or null when TfL didn't price this mode (e.g. cycling).
+  fareTotalCost: number | null;
+}
+
+export interface RouteComparisonResult {
+  options: RouteComparisonOption[];
   fetchedAt: string;
 }

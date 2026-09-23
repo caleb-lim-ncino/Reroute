@@ -7,6 +7,8 @@ import type {
   LineDisruptionResult,
   LineStatusResult,
   ResolveStationResult,
+  RouteComparisonOption,
+  RouteComparisonResult,
   StationMatch,
   TflDisruption,
   TflArrival,
@@ -187,11 +189,13 @@ export interface JourneyPlan {
 export async function getJourneyPlan(fromId: string, toId: string, appKey = ""): Promise<JourneyPlan> {
   const path = `/Journey/JourneyResults/${encodeURIComponent(fromId)}/to/${encodeURIComponent(toId)}`;
   const [live, baseline] = await Promise.all([
-    fetchTfl<TflJourneyResultsResponse>(path, { mode: JOURNEY_MODES }, appKey),
+    fetchTfl<TflJourneyResultsResponse>(path, { mode: JOURNEY_MODES, fares: "true" }, appKey),
     // A failed baseline shouldn't sink the live answer; `usual: null` says so downstream.
-    fetchTfl<TflJourneyResultsResponse>(path, { mode: JOURNEY_MODES, ...sameTimeNextWeek() }, appKey).catch(
-      () => undefined,
-    ),
+    fetchTfl<TflJourneyResultsResponse>(
+      path,
+      { mode: JOURNEY_MODES, fares: "true", ...sameTimeNextWeek() },
+      appKey,
+    ).catch(() => undefined),
   ]);
 
   if (!live.value.journeys || live.value.journeys.length === 0) {
@@ -214,6 +218,49 @@ export async function getJourneyOptions(
     usual: plan.usual ? projectJourney(plan.usual) : null,
     live: plan.live.map(projectJourney),
     fetchedAt: plan.fetchedAt,
+  };
+}
+
+// ---- page-only: mode-restricted alternatives, to weigh cost/time against the plan ----
+
+const COMPARISON_MODES: Array<{ key: string; label: string; modes: string }> = [
+  { key: "tube", label: "Tube/rail only", modes: "tube,dlr,overground,elizabeth-line,walking" },
+  { key: "bus", label: "Bus only", modes: "bus,walking" },
+];
+
+async function comparisonOption(
+  fromId: string,
+  toId: string,
+  mode: { key: string; label: string; modes: string },
+  appKey: string,
+): Promise<Cached<RouteComparisonOption> | undefined> {
+  const path = `/Journey/JourneyResults/${encodeURIComponent(fromId)}/to/${encodeURIComponent(toId)}`;
+  try {
+    const { value, fetchedAt } = await fetchTfl<TflJourneyResultsResponse>(
+      path,
+      { mode: mode.modes, fares: "true" },
+      appKey,
+    );
+    const journey = value.journeys?.[0];
+    if (!journey) return undefined;
+    return {
+      value: { key: mode.key, label: mode.label, duration: journey.duration, fareTotalCost: journey.fare?.totalCost ?? null },
+      fetchedAt,
+    };
+  } catch {
+    // A mode with no viable route (e.g. bus-only across the river) just drops out of the table.
+    return undefined;
+  }
+}
+
+// Restricts the planner to one mode at a time (bus-only, tube-only, …) so a commuter can
+// weigh cost and time against the route the agent already checked.
+export async function getRouteComparison(fromId: string, toId: string, appKey = ""): Promise<RouteComparisonResult> {
+  const results = await Promise.all(COMPARISON_MODES.map((m) => comparisonOption(fromId, toId, m, appKey)));
+  const present = results.filter((r): r is Cached<RouteComparisonOption> => r !== undefined);
+  return {
+    options: present.map((r) => r.value),
+    fetchedAt: present.length ? oldest(...present.map((r) => r.fetchedAt)) : new Date().toISOString(),
   };
 }
 
@@ -264,8 +311,29 @@ export async function getLineDisruptionDetail(lineId: string, appKey = ""): Prom
 
 // ---- page-only data: departure boards and crowding ------------------------------------
 
-export async function getArrivals(stopId: string, appKey = ""): Promise<Cached<TflArrival[]>> {
+async function arrivalsAt(stopId: string, appKey: string): Promise<Cached<TflArrival[]>> {
   return fetchTfl<TflArrival[]>(`/StopPoint/${encodeURIComponent(stopId)}/Arrivals`, {}, appKey, liveCache);
+}
+
+// Leaf stops under a StopPoint tree (e.g. the lettered stands of a bus station) that serve `lineId`.
+function leafStops(node: TflStopPoint, lineId: string): string[] {
+  if (!node.children?.length) {
+    const serves = !lineId || (node.lines ?? []).some((l) => l.id === lineId);
+    return serves ? [node.naptanId] : [];
+  }
+  return node.children.flatMap((c) => leafStops(c, lineId));
+}
+
+// Bus legs start at a stop *group* (490G…, e.g. "West Croydon Bus Station"), and TfL
+// answers arrivals for a group with an empty list: the buses belong to its lettered stands
+// (B1, B3…), two levels down. Expand the group to the stands serving this route.
+export async function getArrivals(stopId: string, lineId = "", appKey = ""): Promise<Cached<TflArrival[]>> {
+  if (!stopId.startsWith("490G") && !stopId.startsWith("HUB")) return arrivalsAt(stopId, appKey);
+  const group = await fetchTfl<TflStopPoint>(`/StopPoint/${encodeURIComponent(stopId)}`, {}, appKey);
+  const stands = [...new Set(leafStops(group.value, lineId))].slice(0, 6);
+  if (stands.length === 0) return arrivalsAt(stopId, appKey);
+  const all = await Promise.all(stands.map((id) => arrivalsAt(id, appKey)));
+  return { value: all.flatMap((a) => a.value), fetchedAt: oldest(...all.map((a) => a.fetchedAt)) };
 }
 
 // Live crowding exists only for Underground stations (940G…); anything else reports
