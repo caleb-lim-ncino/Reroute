@@ -24,6 +24,10 @@ its "Other ways to go" list expands into a full stop-by-stop bus itinerary:
 
 ![Bus-only alternative expanded to its full itinerary](screenshots/verdict-alternatives.png)
 
+Desktop: [good service](screenshots/verdict-good-service-desktop.png) ·
+[disrupted](screenshots/verdict-disrupted-desktop.png) ·
+[bus alternative expanded](screenshots/verdict-alternatives-desktop.png)
+
 ## Why
 
 Your usual Tube route might be disrupted right now, and checking line status yourself
