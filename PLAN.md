@@ -33,7 +33,7 @@ Verified against the `genai` account (`714322698969`, `us-east-1`):
 
 - `us.anthropic.claude-haiku-4-5-20251001-v1:0` → `AccessDeniedException`, **explicit deny
   in service control policy** `p-9cv7o7z3`
-- `arn:aws:bedrock:us-east-1:714322698969:application-inference-profile/e3c8ajgefxsj`
+- `arn:aws:bedrock:...`
   (Haiku 4.5) → works, 677 ms, returns `usage` token counts
 
 So `VERDICT_MODEL_ID` must be an application-inference-profile ARN, never a bare model ID.
@@ -41,9 +41,9 @@ Known-good ARNs already present in the shell environment:
 
 | Model | ARN |
 |---|---|
-| Haiku 4.5 | `arn:aws:bedrock:us-east-1:714322698969:application-inference-profile/e3c8ajgefxsj` |
-| Sonnet 5 | `arn:aws:bedrock:us-east-1:714322698969:application-inference-profile/2h8v82mbrax9` |
-| Opus 5 | `arn:aws:bedrock:us-east-1:714322698969:application-inference-profile/qx54tws0g4uy` |
+| Haiku 4.5 | `arn:aws:bedrock:...` |
+| Sonnet 5 | `arn:aws:bedrock:...` |
+| Opus 5 | `arn:aws:bedrock:...` |
 
 **This kills the OpenAI-on-Bedrock half of the stretch router.** `gpt-oss` / GPT-5-mini
 have no application inference profile provisioned in this account, and the SCP denies
