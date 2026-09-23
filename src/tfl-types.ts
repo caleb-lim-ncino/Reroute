@@ -190,6 +190,8 @@ export interface RouteComparisonOption {
   duration: number;
   // Pay-as-you-go pence, or null when TfL didn't price this mode (e.g. cycling).
   fareTotalCost: number | null;
+  // The full journey, so the page can expand this option into a step-by-step itinerary.
+  journey: TflJourney;
 }
 
 export interface RouteComparisonResult {

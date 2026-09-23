@@ -178,6 +178,9 @@
       hidden.value = s.id;
       showPicked(s);
       updateClear();
+      // Keep a one-handed flow moving: From → To → (keyboard away, submit in view).
+      if (fieldName === "from" && !combos.to?.get()) document.getElementById("to")?.focus();
+      else if (fieldName === "to" && combos.from?.get()) input.blur();
     }
 
     function clearInput() {
@@ -274,6 +277,7 @@
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
     arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   };
 
   function icon(name, className) {
@@ -387,15 +391,18 @@
     input.focus();
   }
 
-  function quick(label, from, to, primary) {
-    const b = document.createElement("button");
+  // A big thumb-sized card: the whole commute, checked in one tap.
+  function quick(kind, label, from, to, primary) {
+    const b = el("button", `commute-card ${kind}${primary ? " primary" : ""}`);
     b.type = "button";
-    b.className = primary ? "quick" : "quick secondary";
-    b.append(el("small", "", label));
-    const route = document.createElement("span");
-    route.className = "quick-route";
+    const badge = el("span", "commute-icon");
+    badge.append(icon(kind));
+    const text = el("span", "commute-text");
+    const route = el("span", "commute-route");
     route.append(el("span", "", from.name), icon("arrow"), el("span", "", to.name));
-    b.append(route);
+    text.append(el("span", "commute-kind", label), route);
+    const go = el("span", "commute-go", "Check");
+    b.append(badge, text, go);
     b.addEventListener("click", () => {
       combos.from.set(from);
       combos.to.set(to);
@@ -404,26 +411,63 @@
     return b;
   }
 
+  // A small pill in the collapsed bar: shows the saved station, or invites adding one.
+  // Clicking a filled chip opens the panel; clicking an empty one jumps straight to search.
+  function chip(kind, s) {
+    const b = el("button", `chip ${kind}${s ? "" : " empty"}`);
+    b.type = "button";
+    b.append(icon(s ? kind : "plus"), el("span", "chip-label", s ? s.name : `Add ${kind}`));
+    b.addEventListener("click", () => {
+      savedExpanded = true;
+      renderSaved();
+      if (!s) editSlot(kind);
+    });
+    return b;
+  }
+
+  let savedExpanded = false;
+
+  // Collapsed by default: a slim bar with home/work chips and one-tap check buttons.
+  // "Manage" expands the full cards (with change/remove) so the form keeps most of the space.
   function renderSaved() {
     const home = store.get("home");
     const work = store.get("work");
+
+    const commute = el("div", "commute");
+    if (home && work && home.id !== work.id) {
+      // Mornings lead with the commute in; afternoons with the commute home.
+      const morning = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "numeric", hourCycle: "h23" }).format()) < 13;
+      const toWork = quick("work", "To work", home, work, morning);
+      const toHome = quick("home", "To home", work, home, !morning);
+      commute.append(...(morning ? [toWork, toHome] : [toHome, toWork]));
+    }
+
+    const bar = el("div", "saved-bar");
+    const chips = el("div", "saved-chips");
+    chips.append(chip("home", home), chip("work", work));
+    bar.append(chips);
+
+    const actions = el("div", "saved-bar-actions");
+    const toggle = el("button", "saved-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(savedExpanded));
+    toggle.append(icon("chevron"), document.createTextNode("Manage"));
+    toggle.addEventListener("click", () => {
+      savedExpanded = !savedExpanded;
+      renderSaved();
+    });
+    actions.append(toggle);
+    bar.append(actions);
+
+    const panel = el("div", "saved-panel");
+    panel.hidden = !savedExpanded;
     const head = el("div", "saved-head");
     head.append(el("h2", "", "My stations"), el("small", "", "Saved in this browser"));
     const slots = el("div", "slots");
     slots.append(home ? slotCard("home", home) : emptySlot("home"), work ? slotCard("work", work) : emptySlot("work"));
-    saved.replaceChildren(head, slots);
+    panel.append(head, slots);
 
-    if (home && work && home.id !== work.id) {
-      // Mornings lead with the commute in; afternoons with the commute home.
-      const morning = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "numeric", hourCycle: "h23" }).format()) < 13;
-      const toWork = quick("Check now · to work", home, work, morning);
-      const toHome = quick("Check now · to home", work, home, !morning);
-      const row = el("div", "quick-row");
-      row.append(...(morning ? [toWork, toHome] : [toHome, toWork]));
-      saved.append(row);
-    } else {
-      saved.append(el("p", "saved-hint", home || work ? `Add your ${home ? "work" : "home"} station for one-tap commute checks.` : "Save home and work for one-tap commute checks."));
-    }
+    saved.replaceChildren(...(commute.childElementCount ? [commute] : []), bar, panel);
   }
 
   // ---- loading gauge ---------------------------------------------------------------
@@ -517,7 +561,55 @@
   setInterval(tickClocks, 1000);
   document.body.addEventListener("htmx:afterSwap", tickClocks);
 
-  // ---- wire up ---------------------------------------------------------------------
+  // ---- theme -----------------------------------------------------------------------
+  // The <head> script already set data-theme before paint; this keeps it in sync.
+
+  const root = document.documentElement;
+  const themeBtn = document.querySelector(".theme-toggle");
+  const systemDark = matchMedia("(prefers-color-scheme: dark)");
+
+  function applyTheme(t) {
+    root.dataset.theme = t;
+    document.querySelector('meta[name="theme-color"]').content = t === "dark" ? "#11151c" : "#ffffff";
+    themeBtn?.setAttribute("aria-label", t === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  }
+  applyTheme(root.dataset.theme === "dark" ? "dark" : "light");
+  themeBtn?.addEventListener("click", () => {
+    const next = root.dataset.theme === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem("reroute.theme", next);
+    } catch {}
+    applyTheme(next);
+  });
+  // Follow the OS only until the user has picked a side themselves.
+  systemDark.addEventListener("change", (e) => {
+    let pinned = null;
+    try {
+      pinned = localStorage.getItem("reroute.theme");
+    } catch {}
+    if (!pinned) applyTheme(e.matches ? "dark" : "light");
+  });
+
+  // ---- profile popover --------------------------------------------------------------
+
+  const profileToggle = document.querySelector(".profile-toggle");
+  const profileCard = document.getElementById("profile-card");
+  if (profileToggle && profileCard) {
+    const closeProfile = () => {
+      profileCard.hidden = true;
+      profileToggle.setAttribute("aria-expanded", "false");
+    };
+    profileToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = profileCard.hidden;
+      profileCard.hidden = !open;
+      profileToggle.setAttribute("aria-expanded", String(open));
+    });
+    document.addEventListener("click", (e) => {
+      if (!profileCard.hidden && !profileCard.contains(e.target) && e.target !== profileToggle) closeProfile();
+    });
+    document.addEventListener("keydown", (e) => e.key === "Escape" && closeProfile());
+  }
 
   document.querySelectorAll(".combo").forEach(setupCombo);
   form.querySelector(".swap").addEventListener("click", () => {

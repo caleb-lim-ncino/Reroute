@@ -124,7 +124,7 @@ app.get("/board/:stopId", async (c) => {
     return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: arrivals.value, status: status?.lines[0] }));
   } catch (err) {
     console.error(`[board] ${stopId}: ${err}`);
-    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: [] }));
+    return c.html(departureBoard({ stationName, lineId, mode, towards, arrivals: [], fetchFailed: true }));
   }
 });
 

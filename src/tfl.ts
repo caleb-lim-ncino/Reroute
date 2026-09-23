@@ -244,7 +244,14 @@ async function comparisonOption(
     const journey = value.journeys?.[0];
     if (!journey) return undefined;
     return {
-      value: { key: mode.key, label: mode.label, duration: journey.duration, fareTotalCost: journey.fare?.totalCost ?? null },
+      value: {
+        key: mode.key,
+        label: mode.label,
+        duration: journey.duration,
+        fareTotalCost: journey.fare?.totalCost ?? null,
+        // Kept so the page can expand this option into a full itinerary without a second fetch.
+        journey,
+      },
       fetchedAt,
     };
   } catch {
