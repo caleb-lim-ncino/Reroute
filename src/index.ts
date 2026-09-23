@@ -3,7 +3,7 @@ import { serveStatic } from "hono/bun";
 import { prewarm, runVerdict, type StationInput, type VerdictRun } from "./agent.ts";
 import { loadConfig } from "./config.ts";
 import { LINE_STYLES } from "./lines.ts";
-import { finish, progressOf, STAGES } from "./progress.ts";
+import { cancel, finish, progressOf, STAGES } from "./progress.ts";
 import { startStationIndex, stationById, stations } from "./stations.ts";
 import { getArrivals, getJourneyPlan, getLineStatus, getLiveCrowding, getRouteComparison } from "./tfl.ts";
 import type { TflJourney } from "./tfl-types.ts";
@@ -56,11 +56,14 @@ async function routeFor(run: VerdictRun): Promise<CardExtras["route"]> {
   }
 }
 
-async function compareFor(run: VerdictRun): Promise<CardExtras["compare"]> {
+async function compareFor(run: VerdictRun, route: CardExtras["route"]): Promise<CardExtras["compare"]> {
   if (!run.journey || run.failure) return undefined;
   try {
     const { options } = await getRouteComparison(run.journey.fromId, run.journey.toId, config.tflAppKey);
-    return options;
+    // A mode-restricted alternative that's identical to the route already shown (e.g.
+    // "Your route" is already tube-only) is redundant, not a genuine alternative — drop it.
+    const routeSig = route ? signature(route.journey) : undefined;
+    return options.filter((o) => signature(o.journey) !== routeSig);
   } catch (err) {
     console.error(`[compare] couldn't load alternatives: ${err}`);
     return undefined;
@@ -78,7 +81,11 @@ app.post("/plan", async (c) => {
     const run = await runVerdict(stationInput(from, field(form.fromId, 20)), stationInput(to, field(form.toId, 20)), config, {
       rid: rid || undefined,
     });
-    const [route, compare] = await Promise.all([routeFor(run), compareFor(run)]);
+    // The commuter cancelled and is no longer waiting on this response; skip the extra
+    // TfL calls a card would need and let the client's own abort handle the rest.
+    if (run.failure === "cancelled") return c.body(null, 204);
+    const route = await routeFor(run);
+    const compare = await compareFor(run, route);
     // Lets the usage footer refresh as soon as a verdict lands instead of on the next poll.
     c.header("HX-Trigger", "verdict");
     return c.html(verdictCard(from, to, run, { route, compare }));
@@ -91,6 +98,8 @@ app.get("/progress/:rid", (c) => {
   const p = progressOf(c.req.param("rid"));
   return c.json({ stage: p?.stage ?? 0, stages: STAGES });
 });
+
+app.post("/cancel/:rid", (c) => c.json({ cancelled: cancel(c.req.param("rid")) }));
 
 // The whole index, ~30KB: the browser filters it locally so suggestions never wait on the network.
 app.get("/stations.json", (c) => {

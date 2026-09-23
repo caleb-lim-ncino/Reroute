@@ -1,4 +1,5 @@
 import type { VerdictRun } from "./agent.ts";
+import type { Verdict } from "./schema.ts";
 import { lineStyle } from "./lines.ts";
 import { STAGES } from "./progress.ts";
 import { cleanName, stationById } from "./stations.ts";
@@ -47,6 +48,8 @@ const SWAP_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 const WALK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13" cy="4" r="1.6"/><path d="m9 21 2.5-6 2.5 2.5V21M11.5 15 12 9l-3 1.5V14M12 9l3 3.5 2.5.5"/></svg>`;
 
+const GO_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+
 // Both icons are always in the DOM; CSS shows the one for the theme you'd switch *to*.
 function themeToggle(): string {
   return `<button type="button" class="theme-toggle" aria-label="Switch to dark mode" title="Toggle dark mode">
@@ -63,7 +66,8 @@ function profileWidget(): string {
   const photo =
     "https://avatar-management--avatars.us-west-2.prod.public.atl-paas.net/712020:cb6016a1-b4a7-4694-9440-9a98b39fe727/33d50698-1ab5-40ac-887a-9c12422cbac1/128";
   return `<div class="profile">
-    <img class="ncino-logo" src="/static/ncino-logo.svg" alt="nCino" width="93" height="24">
+    <img class="ncino-logo on-light" src="/static/ncino-logo.svg" alt="nCino" width="93" height="24">
+    <img class="ncino-logo on-dark" src="/static/ncino-logo-dark.svg" alt="nCino" width="93" height="24">
     <button type="button" class="profile-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="profile-card">
       <img class="avatar" src="${esc(photo)}" alt="" width="36" height="36">
       <span class="profile-name">Caleb Lim</span>
@@ -147,7 +151,7 @@ export function page(): string {
         ${combo("to", "e.g. Canary Wharf")}
       </div>
       <input type="hidden" name="rid">
-      <button type="submit" class="go">Check my route</button>
+      <button type="submit" class="go"><span>Check my route</span>${GO_ICON}</button>
     </form>
     ${loader()}
     <section id="result"></section>
@@ -163,6 +167,7 @@ function loader(): string {
       <div class="loader-head">
         <span class="line-badge">Reroute line</span>
         <span>Next stop: <strong class="next-stop">${esc(STAGES[0]!)}</strong></span>
+        <button type="button" class="cancel-check">Cancel</button>
       </div>
       <div class="track" style="--pos:0">
         <div class="rail"><div class="rail-fill"></div></div>
@@ -184,6 +189,18 @@ export interface CardExtras {
 }
 
 const formatFare = (pence: number | null | undefined) => (pence == null ? null : `£${(pence / 100).toFixed(2)}`);
+
+// Confidence has no numeric scale of its own (schema.ts only defines low/medium/high), so it's
+// mapped to a 3-step dot gauge here for a scannable visual instead of the bare word.
+const CONFIDENCE_STEPS = { low: 1, medium: 2, high: 3 } as const;
+
+function confidenceGauge(confidence: Verdict["confidence"]): string {
+  const level = CONFIDENCE_STEPS[confidence];
+  const dots = [1, 2, 3]
+    .map((i) => `<span class="gauge-dot${i <= level ? " filled" : ""}"></span>`)
+    .join("");
+  return `<span class="confidence-gauge" data-level="${esc(confidence)}" role="img" aria-label="Confidence: ${esc(confidence)}">${dots}<small>${esc(confidence)}</small></span>`;
+}
 
 export function verdictCard(from: string, to: string, run: VerdictRun, extras: CardExtras = {}): string {
   const v = run.verdict;
@@ -222,7 +239,11 @@ export function verdictCard(from: string, to: string, run: VerdictRun, extras: C
   ${note || v.alternative_summary ? `<div class="verdict-notes">${note ? `<p>${esc(note)}</p>` : ""}${v.alternative_summary ? `<p><strong>Alternative:</strong> ${esc(v.alternative_summary)}</p>` : ""}</div>` : ""}
   ${route ? `<div class="verdict-body">${boardSlot(route.journey)}${itinerary(route.journey, route.label, route.live, status !== "clear")}</div>` : ""}
   ${extras.compare?.length ? compareOptions(route, extras.compare) : ""}
-  <footer class="verdict-meta"><small>Confidence: ${esc(v.confidence)} · checked in ${(run.durationMs / 1000).toFixed(1)}s · $${run.costUsd.toFixed(4)}</small></footer>
+  <footer class="verdict-meta">
+    <div class="meta-stat">${confidenceGauge(v.confidence)}</div>
+    <div class="meta-stat"><small>Checked in</small><span>${(run.durationMs / 1000).toFixed(1)}s</span></div>
+    <div class="meta-stat"><small>Cost</small><span>$${run.costUsd.toFixed(4)}</span></div>
+  </footer>
 </article>`;
 }
 

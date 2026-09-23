@@ -224,7 +224,7 @@ export async function getJourneyOptions(
 // ---- page-only: mode-restricted alternatives, to weigh cost/time against the plan ----
 
 const COMPARISON_MODES: Array<{ key: string; label: string; modes: string }> = [
-  { key: "tube", label: "Tube/rail only", modes: "tube,dlr,overground,elizabeth-line,walking" },
+  { key: "tube", label: "Tube only", modes: "tube,walking" },
   { key: "bus", label: "Bus only", modes: "bus,walking" },
 ];
 

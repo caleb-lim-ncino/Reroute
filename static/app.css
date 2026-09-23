@@ -109,7 +109,8 @@
 }
 
 html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
-body { background: var(--bg); color: var(--fg); transition: background-color .2s, color .2s; }
+body { background: var(--bg); color: var(--fg); }
+.theme-switching *, .theme-switching *::before, .theme-switching *::after { transition: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* One focus ring for everything custom, since those buttons opt out of Pico's box-shadow ring. */
@@ -119,7 +120,7 @@ body { background: var(--bg); color: var(--fg); transition: background-color .2s
 .stop-list summary::after, .option summary::after { display: none !important; }
 
 /* Shared reset for every custom button, so none inherit Pico's filled-primary look. */
-.chip, .saved-toggle, button.link, .swap, .theme-toggle, .profile-toggle, .combo .clear, .commute-card {
+.chip, .saved-toggle, button.link, .swap, .theme-toggle, .profile-toggle, .combo .clear, .commute-card, .cancel-check {
   width: auto;
   margin: 0;
   border: 0;
@@ -142,10 +143,18 @@ body > header.topbar {
   gap: .75rem;
   padding-top: max(.6rem, env(safe-area-inset-top));
   padding-bottom: .6rem;
+  border-bottom: 1px solid var(--hairline);
+}
+/* Blur lives on a pseudo-layer: backdrop-filter on the bar itself would become the containing
+   block for the position:fixed profile sheet and pin it to the bar instead of the viewport. */
+body > header.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   -webkit-backdrop-filter: saturate(1.4) blur(12px);
   backdrop-filter: saturate(1.4) blur(12px);
-  border-bottom: 1px solid var(--hairline);
 }
 .brand { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .brand h1 { margin: 0; font-size: 1.3rem; line-height: 1.1; color: var(--fg-strong); }
@@ -168,7 +177,8 @@ body > header.topbar {
 [data-theme="light"] .theme-toggle .to-light, [data-theme="dark"] .theme-toggle .to-dark { display: none; }
 
 @media (min-width: 720px) {
-  body > header.topbar { position: static; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 0; padding-block: 1rem; }
+  body > header.topbar { position: static; border-bottom: 0; padding-block: 1rem; }
+  body > header.topbar::before { content: none; }
   .brand { gap: 1rem; }
   .brand h1 { font-size: 2rem; }
   .brand p { display: block; }
@@ -179,9 +189,8 @@ body > header.topbar {
 /* ---- profile widget ---- */
 .profile { position: relative; display: flex; align-items: center; gap: .6rem; }
 .ncino-logo { display: none; width: 72px; height: auto; flex: none; }
-/* The wordmark is navy; on dark it sits on a light plate rather than being recoloured. */
-[data-theme="dark"] .ncino-logo { background: #f4f6f9; padding: .3rem .45rem; border-radius: .4rem; box-sizing: content-box; }
 @media (min-width: 440px) { .ncino-logo { display: block; } }
+[data-theme="dark"] .ncino-logo.on-light, [data-theme="light"] .ncino-logo.on-dark { display: none; }
 
 .profile-toggle {
   display: flex;
@@ -224,7 +233,9 @@ body > header.topbar {
   border-radius: 1rem;
   background: var(--hairline);
 }
-@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-up { from { transform: translateY(100%); opacity: .4; } to { transform: translateY(0); opacity: 1; } }
+@keyframes sheet-down { from { transform: translateY(0); opacity: 1; } to { transform: translateY(100%); opacity: .4; } }
+.profile-card.closing { animation: sheet-down .18s ease-in forwards; }
 .profile-card[hidden] { display: none; }
 @media (min-width: 720px) {
   .profile-card {
@@ -237,8 +248,12 @@ body > header.topbar {
     border-radius: .8rem;
     box-shadow: var(--shadow-lg);
     padding: 1.1rem 1.1rem .6rem;
-    animation: none;
+    transform-origin: top right;
+    animation: pop-in .16s cubic-bezier(.2, .9, .3, 1.3);
   }
+  .profile-card.closing { animation: pop-out .12s ease-in forwards; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(-6px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes pop-out { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(-6px) scale(.96); } }
   /* Little caret so the card visibly anchors to the avatar it dropped from. */
   .profile-card::before {
     top: -7px;
@@ -324,12 +339,14 @@ body > header.topbar {
 main { padding-bottom: 2rem; }
 
 /* ---- commute: one-tap checks, the main event when home & work are saved ---- */
-.commute { display: grid; gap: .6rem; margin-bottom: .9rem; }
-@media (min-width: 720px) { .commute { grid-template-columns: 1fr 1fr; } }
+.commute { display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem; margin-bottom: .9rem; }
+@media (min-width: 720px) { .commute { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .commute-card {
   display: flex;
   align-items: center;
   gap: .8rem;
+  width: 100%;
+  min-width: 0;
   min-height: 4.2rem;
   padding: .75rem .9rem;
   text-align: left;
@@ -356,8 +373,8 @@ main { padding-bottom: 2rem; }
 .commute-icon .icon { width: 1.2rem; height: 1.2rem; }
 .commute-text { display: flex; flex-direction: column; gap: .1rem; min-width: 0; flex: 1; }
 .commute-kind { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--fg-muted); }
-.commute-route { display: flex; align-items: center; gap: .35rem; font-weight: 700; font-size: 1rem; color: var(--fg-strong); min-width: 0; }
-.commute-route > span:not(.icon) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commute-route { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .35rem; line-height: 1.3; font-weight: 700; font-size: 1rem; color: var(--fg-strong); min-width: 0; }
+.commute-route > span:not(.icon) { overflow-wrap: anywhere; }
 .commute-route .icon { width: .9rem; height: .9rem; color: var(--fg-muted); }
 .commute-go {
   flex: none;
@@ -615,8 +632,33 @@ button.link:hover { color: var(--blue); }
 .suggestions .opt-crowd { grid-area: crowd; }
 .suggestions .opt-lines { grid-area: lines; }
 .suggestions mark { background: none; color: inherit; text-decoration: underline 2px var(--red); text-underline-offset: 2px; padding: 0; }
-.picked { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; min-height: 1.6rem; }
-#plan button.go { width: 100%; margin: .6rem 0 0; min-height: 3.1rem; font-weight: 700; font-size: 1.05rem; border-radius: .75rem; }
+/* Tags (lines + crowding) wrap together on the left; the home/work action always
+   sits flush right, dropping to its own line on the right rather than dangling
+   under the tags where it used to look clipped against the button below. */
+.picked { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .35rem .6rem; min-height: 1.6rem; margin-bottom: .15rem; }
+.picked-tags { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; min-width: 0; }
+.picked-action { flex: none; margin-left: auto; }
+.picked:empty { display: none; }
+#plan button.go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  width: 100%;
+  margin: .9rem 0 0;
+  min-height: 3.1rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  border-radius: .75rem;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--blue) 35%, transparent);
+  transition: transform .12s, box-shadow .15s, background .15s, opacity .15s;
+}
+#plan button.go svg { width: 1.1rem; height: 1.1rem; }
+#plan button.go:hover { box-shadow: 0 4px 16px color-mix(in srgb, var(--blue) 45%, transparent); }
+#plan button.go:active { transform: scale(.985); }
+#plan button.go:disabled { opacity: 1; box-shadow: none; cursor: progress; }
+#plan button.go:disabled svg { animation: nudge .6s ease-in-out infinite alternate; }
+@keyframes nudge { to { translate: .3rem 0; } }
 
 /* ---- crowding chip ---- */
 .crowd {
@@ -641,6 +683,7 @@ button.link:hover { color: var(--blue); }
 /* ---- loading gauge: a little train running the Reroute line ---- */
 .htmx-indicator { display: none; }
 .htmx-request.htmx-indicator { display: block; }
+#checking { scroll-margin: 4.5rem 0 1rem; }
 .loader {
   margin: 1rem 0;
   padding: 1rem 1rem 1.1rem;
@@ -653,6 +696,18 @@ button.link:hover { color: var(--blue); }
 .loader-head { display: flex; justify-content: space-between; align-items: center; gap: .6rem; font-size: .88rem; flex-wrap: wrap; }
 .loader-head strong { color: var(--fg-strong); }
 .line-badge { background: var(--blue-fill); color: #fff; font-weight: 700; padding: .1rem .55rem; border-radius: .25rem; font-size: .75rem; letter-spacing: .03em; }
+.cancel-check {
+  margin-left: auto;
+  padding: .3rem .8rem;
+  border-radius: 1rem;
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--fg-muted);
+  font-size: .78rem;
+  font-weight: 600;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.cancel-check:hover { background: var(--hover); color: var(--red); border-color: var(--red); }
 .track { position: relative; height: 3.6rem; margin: .6rem .8rem 0; }
 .rail { position: absolute; top: 2.05rem; left: 0; right: 0; height: .5rem; border-radius: .25rem; background: var(--blue-soft); overflow: hidden; }
 .rail-fill { height: 100%; width: calc(var(--pos) * 100%); background: var(--blue); }
@@ -680,7 +735,7 @@ button.link:hover { color: var(--blue); }
 @keyframes bob { from { translate: 0 0; } to { translate: 0 -1.5px; } }
 .quip { margin: .2rem 0 0; text-align: center; font-style: italic; color: var(--fg); }
 .loader-stats { margin: .1rem 0 0; text-align: center; font-size: .8rem; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
-@media (prefers-reduced-motion: reduce) { .train, .profile-card { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .train, .profile-card, #plan button.go:disabled svg { animation: none; } }
 
 /* ---- verdict card: glance first (status, numbers, next train), detail below ---- */
 #result { scroll-margin-top: 4.5rem; }
@@ -714,10 +769,10 @@ button.link:hover { color: var(--blue); }
 [data-status="minor"] .status-pill { color: #1a1a1a; }
 .verdict-text { font-size: 1.12rem; line-height: 1.4; font-weight: 600; margin: .65rem 0 .8rem; color: var(--fg-strong); }
 
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(4.4rem, 1fr)); gap: .5rem; margin: 0 0 .8rem; }
-.facts > div { padding: .5rem .6rem; border-radius: .6rem; background: var(--card); border: 1px solid var(--hairline); }
+.facts { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .8rem; }
+.facts > div { flex: 1 1 4.1rem; min-width: 0; padding: .45rem .5rem; border-radius: .6rem; background: var(--card); border: 1px solid var(--hairline); }
 .facts dt { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--fg-muted); margin: 0; }
-.facts dd { margin: .1rem 0 0; font-size: 1.4rem; font-weight: 800; line-height: 1.15; color: var(--fg-strong); font-variant-numeric: tabular-nums; }
+.facts dd { margin: .1rem 0 0; white-space: nowrap; font-size: 1.4rem; font-weight: 800; line-height: 1.15; color: var(--fg-strong); font-variant-numeric: tabular-nums; }
 .facts dd small { font-size: .72rem; font-weight: 600; margin-left: .15rem; color: var(--fg-muted); }
 .facts .bad dd, .facts .bad dd small { color: var(--red); }
 
@@ -731,7 +786,7 @@ button.link:hover { color: var(--blue); }
 .verdict-notes p { margin: 0 0 .4rem; }
 .verdict-notes strong { color: var(--fg-strong); }
 
-.verdict-body { display: grid; gap: 1rem; padding: 1rem; }
+.verdict-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; padding: 1rem; }
 .verdict h3 { font-size: .8rem; margin: 0 0 .6rem; text-transform: uppercase; letter-spacing: .07em; color: var(--fg-muted); }
 .verdict h3 small { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg-muted); margin-left: .3rem; }
 /* Desktop has room for both at once: the steps on the left, the board pinned alongside. */
@@ -742,12 +797,27 @@ button.link:hover { color: var(--blue); }
 }
 .verdict > footer.verdict-meta {
   margin: 0;
-  padding: .7rem 1rem;
+  padding: .6rem 1rem;
   border-top: 1px solid var(--hairline);
   border-radius: 0;
   background: var(--surface-2);
   color: var(--fg-muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .9rem 1.1rem;
 }
+.meta-stat { display: flex; align-items: baseline; gap: .35rem; }
+.meta-stat small { font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); }
+.meta-stat span { font-size: .85rem; font-weight: 700; color: var(--fg); font-variant-numeric: tabular-nums; }
+
+/* Confidence: no numeric scale from the model, so low/medium/high renders as a 3-dot gauge. */
+.confidence-gauge { display: inline-flex; align-items: center; gap: .2rem; }
+.confidence-gauge small { text-transform: capitalize; font-weight: 700; letter-spacing: 0; margin-left: .3rem; color: var(--fg); font-size: .8rem; }
+.gauge-dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--hairline); box-shadow: inset 0 0 0 1px var(--edge); }
+.confidence-gauge[data-level="low"] .gauge-dot.filled { background: var(--red-fill); }
+.confidence-gauge[data-level="medium"] .gauge-dot.filled { background: var(--amber); }
+.confidence-gauge[data-level="high"] .gauge-dot.filled { background: var(--green); }
 
 /* ---- itinerary: a strip map, one coloured segment per leg ---- */
 .steps { list-style: none; margin: 0; padding: 0 0 0 .6rem; }
@@ -779,13 +849,17 @@ button.link:hover { color: var(--blue); }
 .step-body { font-size: .92rem; margin-top: .2rem; color: var(--fg); }
 .step-facts { font-size: .8rem; color: var(--fg-muted); margin-top: .1rem; }
 .stop-list { margin: .4rem 0 0; font-size: .85rem; }
-.stop-list summary {
+/* :not([role]) matches Pico's own `details summary:not([role])`, which would otherwise win. */
+.stop-list > summary:not([role]) {
   display: inline-flex;
   align-items: center;
   min-height: 2rem;
   cursor: pointer;
   list-style: none;
-  color: var(--blue);
+  /* Pico's open/focus summary states outrank any class selector and animate colour, which
+     left the previous theme's blue showing after a switch; this pins it in every state. */
+  color: var(--blue) !important;
+  transition: none;
   font-weight: 600;
   padding: .2rem .1rem;
   line-height: 1.2;
@@ -798,7 +872,7 @@ button.link:hover { color: var(--blue); }
   transition: transform .15s;
 }
 .stop-list[open] summary::before { transform: rotate(90deg); }
-.stop-list summary:hover { text-decoration: underline; }
+.stop-list > summary:not([role]):hover { text-decoration: underline; }
 /* A little tube-map of its own: a coloured line through a dot per stop. Scoped through two
    classes so it outranks the `.steps > li` rail/marker rules it sits inside. */
 .tube-stops { list-style: none; margin: .3rem 0 0; padding: 0; display: flex; flex-direction: column; }
@@ -917,7 +991,8 @@ footer small { display: block; color: var(--fg-muted); overflow-wrap: anywhere; 
 footer small strong { color: var(--fg); }
 
 /* ---- small-phone tightening ---- */
+@media (max-width: 639px) { .facts dd { font-size: 1.2rem; } }
 @media (max-width: 380px) {
-  .facts dd { font-size: 1.2rem; }
+  .facts dd { font-size: 1.05rem; }
   .commute-go { display: none; }
 }

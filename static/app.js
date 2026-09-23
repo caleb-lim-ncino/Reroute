@@ -201,7 +201,13 @@
       lines.className = "opt-lines";
       lines.append(...s.lines.map(pill));
       const crowd = document.createElement("span");
-      picked.append(lines, crowd, saveControl(fieldName, s));
+      const tags = document.createElement("span");
+      tags.className = "picked-tags";
+      tags.append(lines, crowd);
+      const action = document.createElement("span");
+      action.className = "picked-action";
+      action.append(saveControl(fieldName, s));
+      picked.append(tags, action);
       if (s.id.startsWith("940G")) crowd.innerHTML = await crowdingHtml(s.id);
     }
 
@@ -533,16 +539,28 @@
     gauge = null;
   }
 
+  let currentRid = null;
+
   document.body.addEventListener("htmx:configRequest", (e) => {
     if (e.detail.elt !== form) return;
     const rid = crypto.randomUUID();
+    currentRid = rid;
     e.detail.parameters.rid = rid;
     startGauge(rid);
+    // One-tap commute cards sit at the top of a phone screen, above the fold from the loader.
+    requestAnimationFrame(() => loaderEl.scrollIntoView({ behavior: "smooth", block: "nearest" }));
   });
   document.body.addEventListener("htmx:afterRequest", (e) => {
     if (e.detail.elt !== form) return;
     stopGauge();
+    currentRid = null;
     document.getElementById("result").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  // Cancelling stops the browser from waiting (htmx:abort) and tells the server to
+  // interrupt the agent run, so a request the commuter no longer wants doesn't keep costing.
+  loaderEl.querySelector(".cancel-check")?.addEventListener("click", () => {
+    if (currentRid) fetch(`/cancel/${currentRid}`, { method: "POST" }).catch(() => {});
+    htmx.trigger(form, "htmx:abort");
   });
 
   // ---- board clocks ----------------------------------------------------------------
@@ -569,7 +587,10 @@
   const systemDark = matchMedia("(prefers-color-scheme: dark)");
 
   function applyTheme(t) {
+    // Suspend transitions for the flip so nothing animates through the old theme's colours.
+    root.classList.add("theme-switching");
     root.dataset.theme = t;
+    requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove("theme-switching")));
     document.querySelector('meta[name="theme-color"]').content = t === "dark" ? "#11151c" : "#ffffff";
     themeBtn?.setAttribute("aria-label", t === "dark" ? "Switch to light mode" : "Switch to dark mode");
   }
@@ -595,15 +616,31 @@
   const profileToggle = document.querySelector(".profile-toggle");
   const profileCard = document.getElementById("profile-card");
   if (profileToggle && profileCard) {
+    // Opening un-hides immediately so the open keyframe animation can play. Closing plays
+    // the reverse animation first (via .closing) and only sets hidden once it's finished,
+    // so the card never just vanishes.
     const closeProfile = () => {
-      profileCard.hidden = true;
+      if (profileCard.hidden) return;
       profileToggle.setAttribute("aria-expanded", "false");
+      profileCard.classList.add("closing");
+      profileCard.addEventListener(
+        "animationend",
+        () => {
+          profileCard.hidden = true;
+          profileCard.classList.remove("closing");
+        },
+        { once: true },
+      );
+    };
+    const openProfile = () => {
+      profileCard.classList.remove("closing");
+      profileCard.hidden = false;
+      profileToggle.setAttribute("aria-expanded", "true");
     };
     profileToggle.addEventListener("click", (e) => {
       e.stopPropagation();
-      const open = profileCard.hidden;
-      profileCard.hidden = !open;
-      profileToggle.setAttribute("aria-expanded", String(open));
+      if (profileCard.hidden) openProfile();
+      else closeProfile();
     });
     document.addEventListener("click", (e) => {
       if (!profileCard.hidden && !profileCard.contains(e.target) && e.target !== profileToggle) closeProfile();

@@ -1,7 +1,7 @@
 import { query, startup, type Options, type SDKResultMessage, type WarmQuery } from "@anthropic-ai/claude-agent-sdk";
 import type { Config } from "./config.ts";
 import { Verdict, verdictJsonSchema } from "./schema.ts";
-import { advance } from "./progress.ts";
+import { advance, registerCancel } from "./progress.ts";
 import { createTflServer, TFL_SERVER_NAME } from "./tools.ts";
 import { recordUsage, usageSummary } from "./usage.ts";
 
@@ -153,6 +153,7 @@ export async function runVerdict(
   let result: SDKResultMessage | undefined;
   let thrown: unknown;
   let journey: VerdictRun["journey"];
+  let cancelled = false;
   if (opts.rid) advance(opts.rid, fromInput.id && toInput.id ? 1 : 0);
 
   // Drives the progress gauge and records which stops the agent planned between.
@@ -171,9 +172,17 @@ export async function runVerdict(
   const prompt = `Current time: ${new Date().toISOString()}\nFrom: ${describe(fromInput)}\nTo: ${describe(toInput)}`;
   const warm = await takeWarm(config);
 
+  // Warm path skips the ~4s Claude Code subprocess spawn; cold path is the fallback.
+  const q = warm ? warm.query(prompt) : query({ prompt, options: agentOptions(config) });
+  if (opts.rid) {
+    registerCancel(opts.rid, () => {
+      cancelled = true;
+      void q.interrupt();
+    });
+  }
+
   try {
-    // Warm path skips the ~4s Claude Code subprocess spawn; cold path is the fallback.
-    for await (const message of warm ? warm.query(prompt) : query({ prompt, options: agentOptions(config) })) {
+    for await (const message of q) {
       if (message.type === "result") result = message;
       if (message.type === "assistant") track(message.message.content);
     }
@@ -182,8 +191,9 @@ export async function runVerdict(
     thrown = err;
   }
 
-  // A warm subprocess can die while idle. If it produced nothing, retry once cold.
-  if (warm && !result) {
+  // A warm subprocess can die while idle. If it produced nothing, retry once cold —
+  // unless the commuter cancelled, in which case a retry would just waste another call.
+  if (warm && !result && !cancelled) {
     console.error(`[agent] warm query failed (${thrown}); retrying cold`);
     thrown = undefined;
     try {
@@ -204,7 +214,9 @@ export async function runVerdict(
   const base = { model: config.verdictModelId, durationMs, costUsd, journey };
 
   let failure: string | undefined;
-  if (result?.subtype === "success" && result.structured_output !== undefined) {
+  if (cancelled) {
+    failure = "cancelled";
+  } else if (result?.subtype === "success" && result.structured_output !== undefined) {
     const parsed = Verdict.safeParse(result.structured_output);
     if (parsed.success) {
       logRun(from, to, base, result);
@@ -219,7 +231,11 @@ export async function runVerdict(
     failure = `agent run failed: ${thrown instanceof Error ? thrown.message : String(thrown)}`;
   }
 
-  console.error(`[agent] ${from} -> ${to} FAILED (${durationMs}ms): ${failure}`);
+  if (cancelled) {
+    console.log(`[agent] ${from} -> ${to} cancelled (${durationMs}ms)`);
+  } else {
+    console.error(`[agent] ${from} -> ${to} FAILED (${durationMs}ms): ${failure}`);
+  }
   return { ...base, verdict: fallback(), failure };
 }
 

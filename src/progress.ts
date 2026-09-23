@@ -9,7 +9,21 @@ interface Progress {
 }
 
 const inFlight = new Map<string, Progress>();
+const cancellers = new Map<string, () => void>();
 const MAX_AGE_MS = 5 * 60 * 1000;
+
+// The agent registers how to interrupt its in-flight run under the same rid the page
+// already uses for the progress gauge, so a client-initiated cancel can reach it.
+export function registerCancel(rid: string, fn: () => void): void {
+  cancellers.set(rid, fn);
+}
+
+export function cancel(rid: string): boolean {
+  const fn = cancellers.get(rid);
+  if (!fn) return false;
+  fn();
+  return true;
+}
 
 // Stages only move forward: parallel or repeated tool calls must not send the train backwards.
 export function advance(rid: string, stage: number): void {
@@ -24,6 +38,7 @@ export function progressOf(rid: string): Progress | undefined {
 
 export function finish(rid: string): void {
   inFlight.delete(rid);
+  cancellers.delete(rid);
 }
 
 // Belt and braces for requests whose client vanished before finish() ran.
